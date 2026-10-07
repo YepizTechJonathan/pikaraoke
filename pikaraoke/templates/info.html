@@ -170,6 +170,34 @@
 			window.socket = io({ path: window.pikaraokeConfig.socketioPath });
 		}
 
+		{% if admin and audio_outputs_available %}
+		window.socket.on("audio_outputs_state", function(outputs) {
+			var list = $("#audio-output-list");
+			list.empty();
+			if (outputs.length === 0) {
+				list.html('<p class="has-text-grey">{{ _("No audio outputs reported.") | forceescape }}</p>');
+				return;
+			}
+			outputs.forEach(function(output) {
+				var label = $("<label class=\"checkbox is-block mb-2\">");
+				$("<input type=\"checkbox\" class=\"audio-output-toggle mr-2\">")
+					.attr("data-output-id", output.id)
+					.prop("checked", output.enabled)
+					.appendTo(label);
+				$("<span>").text(output.label).appendTo(label);
+				list.append(label);
+			});
+		});
+
+		$(document).on("change", ".audio-output-toggle", function() {
+			window.socket.emit("audio_output_update", {
+				id: $(this).attr("data-output-id"), enabled: $(this).is(":checked")
+			});
+		});
+
+		window.socket.emit("request_audio_outputs");
+		{% endif %}
+
 		{% if admin and mic_available %}
 		// Mic settings (latency, echo cancel)
 		window.socket.on("mic_settings_state", function(state) {
@@ -577,7 +605,7 @@
 				</div>
 			</div>
 
-			{% if mic_passthrough_enabled %}
+			{% if mic_passthrough_enabled or audio_outputs_available %}
 			<hr class="my-0">
 
 			<header class="card-header py-3 px-5 collapsible-header is-collapsed">
@@ -587,6 +615,19 @@
 			</header>
 			<div class="card-content collapsible-content">
 				<div class="content">
+					{% if audio_outputs_available %}
+					{# MSG: Heading of the list of speakers/screens the karaoke sound can play on. #}
+					<h5 class="mb-2">{% trans %}Outputs{% endtrans %}</h5>
+					<p class="is-size-7 has-text-grey mb-2">
+						{# MSG: Explains the audio output toggles in the Audio settings section. #}
+						{% trans %}Where the karaoke sound plays. Turn on as many as you like.{% endtrans %}
+					</p>
+					<div id="audio-output-list" class="mb-4">
+						{# MSG: Shown when the audio output command reported no outputs or failed. #}
+						<p class="has-text-grey">{% trans %}No audio outputs reported.{% endtrans %}</p>
+					</div>
+					{% endif %}
+					{% if mic_passthrough_enabled %}
 					{% if mic_available %}
 					<h5 class="mb-2">{% trans %}Microphones{% endtrans %}</h5>
 					<p class="is-size-7 has-text-grey mb-2">
@@ -624,6 +665,7 @@
 						<code>sudo apt install pulseaudio-utils</code>
 						{% trans %}and restart PiKaraoke.{% endtrans %}
 					</p>
+					{% endif %}
 					{% endif %}
 				</div>
 			</div>

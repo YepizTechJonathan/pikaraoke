@@ -103,6 +103,7 @@ def info():
         },
         mic_available=k.sound_manager.available,
         mic_passthrough_enabled=k.enable_mic_passthrough,
+        audio_outputs_available=k.audio_outputs.available,
         keep_awake=k.keep_awake,
         keep_awake_unsupported=keep_awake.unsupported_reason(),
     )
