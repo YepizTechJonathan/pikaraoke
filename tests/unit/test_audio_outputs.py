@@ -61,3 +61,23 @@ def test_set_enabled_refuses_an_unlisted_output(run):
     AudioOutputs("karaoke-audio").set_enabled("--help", False)
 
     assert all(c.args[0] == ["karaoke-audio", "list"] for c in run.call_args_list)
+
+
+def test_volume_is_read_and_clamped(run):
+    run.return_value = subprocess.CompletedProcess([], 0, stdout="120\n")
+
+    assert AudioOutputs("karaoke-audio").get_volume() == 100
+    assert run.call_args.args[0] == ["karaoke-audio", "volume"]
+
+
+def test_volume_is_none_when_the_command_has_no_volume(run):
+    run.side_effect = subprocess.CalledProcessError(1, "karaoke-audio")
+
+    assert AudioOutputs("karaoke-audio").get_volume() is None
+
+
+def test_set_volume_passes_a_clamped_value(run):
+    run.return_value = subprocess.CompletedProcess([], 0, stdout="0\n")
+
+    assert AudioOutputs("karaoke-audio").set_volume(-5) == 0
+    assert ["karaoke-audio", "volume", "0"] in [c.args[0] for c in run.call_args_list]

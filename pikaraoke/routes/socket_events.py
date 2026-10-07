@@ -205,6 +205,7 @@ def setup_socket_events(socketio):
         """Client requests the current audio output list from the server."""
         k = get_karaoke_instance()
         socketio.emit("audio_outputs_state", k.audio_outputs.get_outputs(), room=request.sid)
+        socketio.emit("audio_volume_state", k.audio_outputs.get_volume(), room=request.sid)
 
     @host_only("audio_output_update")
     def handle_audio_output_update(data: dict) -> None:
@@ -212,3 +213,9 @@ def setup_socket_events(socketio):
         k = get_karaoke_instance()
         outputs = k.audio_outputs.set_enabled(str(data.get("id", "")), bool(data.get("enabled")))
         socketio.emit("audio_outputs_state", outputs)
+
+    @host_only("audio_volume_change")
+    def handle_audio_volume_change(data: dict) -> None:
+        """Set the output volume and broadcast the volume the host now reports."""
+        k = get_karaoke_instance()
+        socketio.emit("audio_volume_state", k.audio_outputs.set_volume(int(data.get("volume", 0))))
