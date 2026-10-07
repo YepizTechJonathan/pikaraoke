@@ -13,6 +13,7 @@ import qrcode
 from flask_babel import _
 from qrcode.image.pure import PyPNGImage
 
+from pikaraoke.lib.audio_outputs import AudioOutputs
 from pikaraoke.lib.download_manager import DownloadManager
 from pikaraoke.lib.events import EventSystem
 from pikaraoke.lib.ffmpeg import (
@@ -86,6 +87,7 @@ class Karaoke:
 
     # Microphone manager for server-side mic passthrough
     sound_manager: SoundManager
+    audio_outputs: AudioOutputs
 
     # Event system and preferences
     events: EventSystem
@@ -122,6 +124,7 @@ class Karaoke:
         disable_score: bool | None = None,
         enable_fair_queue: bool | None = None,
         enable_mic_passthrough: bool | None = None,
+        audio_output_command: str | None = None,
         hide_notifications: bool | None = None,
         hide_overlay: bool | None = None,
         hide_logo: bool | None = None,
@@ -183,6 +186,7 @@ class Karaoke:
             socketio: SocketIO instance for real-time event emission.
             preferred_language: Language code for UI (e.g., 'en', 'de_DE').
             enable_folder_browsing: Offer a Folders view on the Songs page.
+            audio_output_command: Host command that lists and switches audio outputs.
         """
         logging.basicConfig(
             format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -292,6 +296,8 @@ class Karaoke:
             enabled=self.enable_mic_passthrough,
         )
         self.sound_manager.start()
+
+        self.audio_outputs = AudioOutputs(audio_output_command)
 
         # Initialize queue manager
         self.queue_manager = QueueManager(

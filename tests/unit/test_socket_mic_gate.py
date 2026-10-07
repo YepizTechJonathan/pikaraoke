@@ -26,6 +26,8 @@ ADMIN_EVENTS = [
     ("mic_echo_cancel_change", ({"enabled": True},)),
     ("mic_refresh", ()),
     ("mic_update", ({"label": "USB Mic", "deviceId": "1", "enabled": True, "volume": 0.5},)),
+    ("request_audio_outputs", ()),
+    ("audio_output_update", ({"id": "hdmi", "enabled": False},)),
 ]
 
 # The playback path, which splash screens drive with no admin session.
@@ -63,8 +65,13 @@ def make_socket_app(admin: bool):
     sound_manager.refresh.return_value = []
     sound_manager.load_settings.return_value = {}
 
+    audio_outputs = MagicMock()
+    audio_outputs.get_outputs.return_value = []
+    audio_outputs.set_enabled.return_value = []
+
     karaoke = MagicMock()
     karaoke.sound_manager = sound_manager
+    karaoke.audio_outputs = audio_outputs
     app.config["KARAOKE_INSTANCE"] = karaoke
 
     socketio = SocketIO(app, async_mode="threading")
@@ -87,13 +94,13 @@ def test_every_handler_declares_its_audience():
 
 @pytest.mark.parametrize("event,args", ADMIN_EVENTS)
 def test_admin_handler_ignores_a_guest(event, args):
-    """With a password set, a guest's emit never reaches the sound manager."""
+    """With a password set, a guest's emit never reaches the audio managers."""
     app, socketio, karaoke = make_socket_app(admin=False)
     client = socketio.test_client(app)
 
     client.emit(event, *args)
 
-    assert karaoke.sound_manager.method_calls == []
+    assert karaoke.method_calls == []
 
 
 @pytest.mark.parametrize("event,args", ADMIN_EVENTS)
@@ -104,7 +111,7 @@ def test_admin_handler_serves_the_host(event, args):
 
     client.emit(event, *args)
 
-    assert karaoke.sound_manager.method_calls, f"{event} reached nothing"
+    assert karaoke.method_calls, f"{event} reached nothing"
 
 
 @pytest.mark.parametrize("event,args", PUBLIC_EVENTS)

@@ -380,6 +380,12 @@ def parse_pikaraoke_args() -> argparse.Namespace:
         help="Enable experimental server-side microphone passthrough so singers can hear themselves through the karaoke speakers.",
         required=False,
     )
+    playback.add_argument(
+        "--audio-output-command",
+        help="Command that lists and switches the host's audio outputs, shown as toggles in Settings > Audio. PiKaraoke runs '<command> list', which prints one '<id> <on|off> <label>' line per output, and '<command> <id> on|off'.",
+        default=None,
+        required=False,
+    )
 
     queue = parser.add_argument_group("Queue")
     queue.add_argument(
