@@ -7,6 +7,8 @@ supplies a command, and PiKaraoke only lists and toggles what it reports:
 
     <command> list            one line per output: "<id> <on|off> <label>"
     <command> <id> on|off     turn one output on or off
+    <command> volume          print the output volume, 0-100 (optional)
+    <command> volume <0-100>  set the output volume (optional)
 """
 
 import logging
@@ -55,6 +57,25 @@ class AudioOutputs:
         else:
             self._run(output_id, "on" if enabled else "off")
         return self.get_outputs()
+
+    def get_volume(self) -> int | None:
+        """Return the output volume, or None if the command does not report one."""
+        if not self.available:
+            return None
+        output = self._run("volume")
+        if output is None:
+            return None
+        try:
+            return max(0, min(100, int(output.strip())))
+        except ValueError:
+            logging.warning(f"Ignoring unrecognised audio volume: {output!r}")
+            return None
+
+    def set_volume(self, volume: int) -> int | None:
+        """Set the output volume, then return it as the command now reports it."""
+        if self.available:
+            self._run("volume", str(max(0, min(100, volume))))
+        return self.get_volume()
 
     def _run(self, *args: str) -> str | None:
         try:

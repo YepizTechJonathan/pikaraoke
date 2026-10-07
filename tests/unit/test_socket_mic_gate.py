@@ -28,6 +28,7 @@ ADMIN_EVENTS = [
     ("mic_update", ({"label": "USB Mic", "deviceId": "1", "enabled": True, "volume": 0.5},)),
     ("request_audio_outputs", ()),
     ("audio_output_update", ({"id": "hdmi", "enabled": False},)),
+    ("audio_volume_change", ({"volume": 60},)),
 ]
 
 # The playback path, which splash screens drive with no admin session.
@@ -68,6 +69,8 @@ def make_socket_app(admin: bool):
     audio_outputs = MagicMock()
     audio_outputs.get_outputs.return_value = []
     audio_outputs.set_enabled.return_value = []
+    audio_outputs.get_volume.return_value = 80
+    audio_outputs.set_volume.return_value = 60
 
     karaoke = MagicMock()
     karaoke.sound_manager = sound_manager
