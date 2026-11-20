@@ -479,3 +479,114 @@ class TestFairQueuePosition:
 
         users = [item["user"] for item in qm.queue]
         assert users == ["UserB", "UserA"]
+
+
+class TestRenameSinger:
+    """The orchestrator moving a singer across the queue, screen, history and row."""
+
+    def _row(self, singer_id, name):
+        return {"id": singer_id, "name": name, "created_at": "now"}
+
+    def test_a_free_name_moves_everything(self, mock_karaoke):
+        mock_karaoke.singer_manager.find.side_effect = lambda n: (
+            self._row(1, "Dvae") if n.lower() == "dvae" else None
+        )
+        mock_karaoke.queue_manager.enqueue("/songs/s1---abc.mp4", "Dvae")
+        mock_karaoke.playback_controller.now_playing_user = "Dvae"
+        mock_karaoke.play_history._current_performer = "Dvae"
+
+        assert mock_karaoke.rename_singer("Dvae", "Davey") == "renamed"
+        assert mock_karaoke.queue_manager.queue[0]["user"] == "Davey"
+        assert mock_karaoke.playback_controller.now_playing_user == "Davey"
+        assert mock_karaoke.play_history._current_performer == "Davey"
+        mock_karaoke.singer_manager.rename.assert_called_once_with("Dvae", "Davey")
+
+    def test_nothing_owned_is_adoption(self, mock_karaoke):
+        assert mock_karaoke.rename_singer("Dvae", "Davey") == "adopt"
+        mock_karaoke.singer_manager.rename.assert_not_called()
+
+    def test_a_taken_name_with_data_is_refused(self, mock_karaoke):
+        mock_karaoke.singer_manager.find.side_effect = lambda n: (
+            self._row(1, "Dvae") if n.lower() == "dvae" else self._row(2, "Dave")
+        )
+        mock_karaoke.queue_manager.enqueue("/songs/s1---abc.mp4", "Dvae")
+        assert mock_karaoke.rename_singer("Dvae", "Dave") == "taken"
+        # Refused before anything moves.
+        assert mock_karaoke.queue_manager.queue[0]["user"] == "Dvae"
+        mock_karaoke.singer_manager.rename.assert_not_called()
+
+    def test_an_empty_name_onto_an_existing_one_just_adopts(self, mock_karaoke):
+        # old owns nothing, new exists: taking the existing identity, not a merge.
+        mock_karaoke.singer_manager.find.side_effect = lambda n: (
+            self._row(2, "Dave") if n.lower() == "dave" else None
+        )
+        assert mock_karaoke.rename_singer("Dvae", "Dave") == "adopt"
+        mock_karaoke.singer_manager.rename.assert_not_called()
+
+    def test_a_placeholder_name_is_reserved(self, mock_karaoke):
+        assert mock_karaoke.rename_singer("Dvae", "Pikaraoke") == "reserved"
+        assert mock_karaoke.rename_singer("Randomizer", "Davey") == "reserved"
+
+    def test_a_change_of_casing_renames_the_row(self, mock_karaoke):
+        mock_karaoke.singer_manager.find.side_effect = lambda n: (
+            self._row(1, "dave") if n.lower() == "dave" else None
+        )
+        mock_karaoke.queue_manager.enqueue("/songs/s1---abc.mp4", "dave")
+        assert mock_karaoke.rename_singer("dave", "Dave") == "renamed"
+        assert mock_karaoke.queue_manager.queue[0]["user"] == "Dave"
+        mock_karaoke.singer_manager.rename.assert_called_once_with("dave", "Dave")
+
+
+class TestMergeSingers:
+    """The admin merge, folding the loser's queue, screen and data into the survivor."""
+
+    def test_a_merge_moves_the_queue_screen_and_data(self, mock_karaoke):
+        mock_karaoke.singer_manager.merge.return_value = True
+        mock_karaoke.queue_manager.enqueue("/songs/s1---abc.mp4", "Dvae")
+        mock_karaoke.playback_controller.now_playing_user = "Dvae"
+        mock_karaoke.play_history._current_performer = "Dvae"
+
+        assert mock_karaoke.merge_singers("Dvae", "Dave") == "merged"
+        assert mock_karaoke.queue_manager.queue[0]["user"] == "Dave"
+        assert mock_karaoke.playback_controller.now_playing_user == "Dave"
+        assert mock_karaoke.play_history._current_performer == "Dave"
+        mock_karaoke.singer_manager.merge.assert_called_once_with("Dvae", "Dave")
+
+    def test_a_refused_merge_moves_nothing(self, mock_karaoke):
+        mock_karaoke.singer_manager.merge.return_value = False
+        mock_karaoke.queue_manager.enqueue("/songs/s1---abc.mp4", "Dvae")
+        assert mock_karaoke.merge_singers("Ghost", "Dave") == "unknown"
+        assert mock_karaoke.queue_manager.queue[0]["user"] == "Dvae"
+
+    def test_a_placeholder_is_reserved(self, mock_karaoke):
+        assert mock_karaoke.merge_singers("Dvae", "Pikaraoke") == "reserved"
+        assert mock_karaoke.merge_singers("Randomizer", "Dave") == "reserved"
+        mock_karaoke.singer_manager.merge.assert_not_called()
+
+
+class TestDeleteSinger:
+    """The admin delete, erasing a singer and their plays in one act."""
+
+    def test_a_delete_clears_the_plays_then_removes_the_row(self, mock_karaoke):
+        mock_karaoke.singer_manager.find.return_value = {"id": 7, "name": "Dave"}
+        mock_karaoke.singer_manager.delete_singer.return_value = True
+
+        assert mock_karaoke.delete_singer("Dave") is True
+        # The plays go first, then the row -- the foreign key forbids the reverse.
+        assert mock_karaoke.play_history.cleared_singer_plays == 7
+        mock_karaoke.singer_manager.delete_singer.assert_called_once_with("Dave")
+
+    def test_an_unknown_singer_touches_nothing(self, mock_karaoke):
+        mock_karaoke.singer_manager.find.return_value = None
+        assert mock_karaoke.delete_singer("Ghost") is False
+        assert mock_karaoke.play_history.cleared_singer_plays is None
+        mock_karaoke.singer_manager.delete_singer.assert_not_called()
+
+    def test_a_placeholder_is_refused_before_its_plays_are_cleared(self, mock_karaoke):
+        # Randomizer and Pikaraoke have plays of their own; the refusal has to come
+        # before clear_singer_plays, or their history would be wiped regardless.
+        assert mock_karaoke.delete_singer("Randomizer") is False
+        assert mock_karaoke.delete_singer("Pikaraoke") is False
+        assert mock_karaoke.play_history.cleared_singer_plays is None
+        mock_karaoke.singer_manager.find.assert_not_called()
+        mock_karaoke.singer_manager.delete_singer.assert_not_called()

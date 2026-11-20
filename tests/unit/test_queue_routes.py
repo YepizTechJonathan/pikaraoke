@@ -8,7 +8,8 @@ from flask_babel import Babel
 from pikaraoke.lib.events import EventSystem
 from pikaraoke.lib.preference_manager import PreferenceManager
 from pikaraoke.lib.queue_manager import QueueManager
-from pikaraoke.routes.queue_api import queue_api_bp
+from pikaraoke.lib.singer_manager import SINGER_NAME_MAX_LENGTH
+from pikaraoke.routes.queue_api import EnqueueForm, queue_api_bp
 
 
 @pytest.fixture
@@ -90,6 +91,151 @@ class TestQueueRoutes:
         assert json.loads(response.data)["success"] is False
 
 
+class TestEnqueueRequiresName:
+    """A queue add must carry a name. A blank performer writes a leaderboard row
+    no UI can correct, and nothing legitimate sends one."""
+
+    @pytest.mark.parametrize("name", ["", "   ", "\t"])
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_blank_name_refused(self, mock_get_instance, client, name):
+        response = client.post(
+            "/api/enqueue", data={"song_to_add": "Song.mp4", "song_added_by": name}
+        )
+
+        assert response.status_code == 422
+        # Validation refuses before the view runs, so nothing is queued.
+        mock_get_instance.assert_not_called()
+
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_absent_name_refused(self, mock_get_instance, client):
+        response = client.post("/api/enqueue", data={"song_to_add": "Song.mp4"})
+
+        assert response.status_code == 422
+        mock_get_instance.assert_not_called()
+
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_a_name_over_the_cap_is_refused(self, mock_get_instance, client):
+        response = client.post(
+            "/api/enqueue",
+            data={"song_to_add": "Song.mp4", "song_added_by": "x" * (SINGER_NAME_MAX_LENGTH + 1)},
+        )
+
+        assert response.status_code == 422
+        mock_get_instance.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            '<img src=x onerror="console.log(document.domain)">',
+            "Alice <script>",
+            "Bob > Carol",
+        ],
+    )
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_angle_brackets_in_name_refused(self, mock_get_instance, client, bad_name):
+        response = client.post(
+            "/api/enqueue", data={"song_to_add": "Song.mp4", "song_added_by": bad_name}
+        )
+
+        assert response.status_code == 422
+        mock_get_instance.assert_not_called()
+
+    def test_the_name_is_normalised_on_load(self):
+        data = EnqueueForm().load({"song_to_add": "Song.mp4", "song_added_by": "  Jo   B  "})
+        assert data["song_added_by"] == "Jo B"
+
+    @patch("pikaraoke.routes.queue_api.broadcast_event")
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_a_merged_name_is_turned_away(self, mock_get_instance, mock_broadcast, client):
+        mock_karaoke = MagicMock()
+        mock_karaoke.song_manager.songs = {"Song.mp4"}
+        mock_karaoke.singer_manager.merged_into_name.return_value = "Dave"
+        mock_get_instance.return_value = mock_karaoke
+
+        response = client.post(
+            "/api/enqueue", data={"song_to_add": "Song.mp4", "song_added_by": "Dvae"}
+        )
+
+        assert response.status_code == 200
+        ok, message = response.get_json()["success"]
+        assert ok is False
+        assert "Dave" in message
+        # The guard returns before the enqueue path broadcasts, so nothing queued.
+        mock_broadcast.assert_not_called()
+
+
+class TestEnqueueRequiresSongInLibrary:
+    """POST /api/enqueue must only accept songs that exist in k.song_manager.songs."""
+
+    @pytest.mark.parametrize(
+        "bad_song",
+        [
+            "/home/pi/Videos/private.mp4",
+            "/etc/passwd",
+            "http://192.168.1.1/stream.mp4",
+            "-loglevel",
+        ],
+    )
+    @patch("pikaraoke.routes.queue_api.broadcast_event")
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_song_outside_library_rejected_with_400(
+        self, mock_get_instance, mock_broadcast, client, bad_song, queue_env
+    ):
+        qm, mock_karaoke, _queue_updates, _now_playing_updates = queue_env
+        mock_karaoke.song_manager.songs = {"/songs/legitimate---dQw4w9WgXcQ.mp4"}
+        mock_get_instance.return_value = mock_karaoke
+
+        response = client.post(
+            "/api/enqueue", data={"song_to_add": bad_song, "song_added_by": "guest"}
+        )
+
+        assert response.status_code == 400
+        data = response.get_json()
+        assert data["success"][0] is False
+        assert qm.queue == []
+        mock_broadcast.assert_not_called()
+
+    @patch("pikaraoke.routes.queue_api.broadcast_event")
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_song_in_library_accepted(self, mock_get_instance, mock_broadcast, client, queue_env):
+        song_path = "/songs/Artist - Song---dQw4w9WgXcQ.mp4"
+        qm, mock_karaoke, _queue_updates, _now_playing_updates = queue_env
+        mock_karaoke.song_manager.songs = {song_path}
+        mock_karaoke.song_manager.display_name_from_path.return_value = "Artist - Song"
+        mock_karaoke.singer_manager.merged_into_name.return_value = None
+        mock_get_instance.return_value = mock_karaoke
+
+        response = client.post(
+            "/api/enqueue", data={"song_to_add": song_path, "song_added_by": "guest"}
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["song"] == "Artist - Song"
+        assert response.get_json()["success"][0] is True
+        assert qm.queue[0]["file"] == song_path
+        assert qm.queue[0]["user"] == "guest"
+        assert qm.queue[0]["semitones"] == 0
+        mock_broadcast.assert_called_once_with("queue_update")
+
+    @patch("pikaraoke.routes.queue_api.broadcast_event")
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_a_saved_key_is_pre_applied(self, mock_get_instance, mock_broadcast, client, queue_env):
+        song_path = "/songs/Artist - Song---dQw4w9WgXcQ.mp4"
+        qm, mock_karaoke, _queue_updates, _now_playing_updates = queue_env
+        mock_karaoke.song_manager.songs = {song_path}
+        mock_karaoke.singer_manager.merged_into_name.return_value = None
+        mock_karaoke.singer_manager.get_saved_key.return_value = -2
+        mock_get_instance.return_value = mock_karaoke
+
+        response = client.post(
+            "/api/enqueue", data={"song_to_add": song_path, "song_added_by": "Alice"}
+        )
+
+        assert response.status_code == 200
+        assert qm.queue[0]["semitones"] == -2
+        mock_karaoke.singer_manager.get_saved_key.assert_called_once_with("Alice", song_path)
+
+
 class TestQueueApiContract:
     """Tests that verify the queue API returns expected data structure.
 
@@ -143,6 +289,35 @@ def _make_queue_item(n: int) -> dict:
     return {"file": f"/songs/song{n}.mp4", "title": f"Song {n}", "user": f"User{n}", "semitones": 0}
 
 
+@pytest.fixture
+def queue_env(tmp_path):
+    """Create a QueueManager with event tracking and mock karaoke instance.
+
+    Returns (queue_manager, mock_karaoke, queue_updates, now_playing_updates).
+    """
+    events = EventSystem()
+    preferences = PreferenceManager(config_file_path=str(tmp_path / "config.ini"))
+    qm = QueueManager(
+        preferences=preferences,
+        events=events,
+        get_now_playing_user=lambda: None,
+        filename_from_path=lambda path, *args: path.split("/")[-1],
+        get_available_songs=lambda: [],
+    )
+
+    queue_updates = []
+    now_playing_updates = []
+    events.on("queue_update", lambda: queue_updates.append(True))
+    events.on("now_playing_update", lambda: now_playing_updates.append(True))
+
+    mock_karaoke = MagicMock()
+    mock_karaoke.queue_manager = qm
+    mock_karaoke.song_manager.display_name_from_path.return_value = "song"
+    mock_karaoke.singer_manager.get_saved_key.return_value = 0
+
+    return qm, mock_karaoke, queue_updates, now_playing_updates
+
+
 class TestQueueEditSocketUpdates:
     """Tests that queue edit actions call appropriate QueueManager methods.
 
@@ -164,33 +339,6 @@ class TestQueueEditSocketUpdates:
     def client_with_session(self, app_with_secret):
         """Create a test client with session support."""
         return app_with_secret.test_client()
-
-    @pytest.fixture
-    def queue_env(self, tmp_path):
-        """Create a QueueManager with event tracking and mock karaoke instance.
-
-        Returns (queue_manager, mock_karaoke, queue_updates, now_playing_updates).
-        """
-        events = EventSystem()
-        preferences = PreferenceManager(config_file_path=str(tmp_path / "config.ini"))
-        qm = QueueManager(
-            preferences=preferences,
-            events=events,
-            get_now_playing_user=lambda: None,
-            filename_from_path=lambda path, *args: path.split("/")[-1],
-            get_available_songs=lambda: [],
-        )
-
-        queue_updates = []
-        now_playing_updates = []
-        events.on("queue_update", lambda: queue_updates.append(True))
-        events.on("now_playing_update", lambda: now_playing_updates.append(True))
-
-        mock_karaoke = MagicMock()
-        mock_karaoke.queue_manager = qm
-        mock_karaoke.song_manager.display_name_from_path.return_value = "song"
-
-        return qm, mock_karaoke, queue_updates, now_playing_updates
 
     @pytest.mark.parametrize(
         "action,song_param",
@@ -273,3 +421,42 @@ class TestQueueEditSocketUpdates:
         assert qm.queue[3]["file"] == "/songs/song2.mp4"
         assert len(queue_updates) == 1, "queue_update event should be emitted once"
         assert len(now_playing_updates) == 1, "now_playing_update event should be emitted once"
+
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_queue_pitch_sets_song_key(self, mock_get_instance, client_with_session, queue_env):
+        """Pre-setting a queued song's key updates it and emits now_playing_update."""
+        qm, mock_karaoke, _queue_updates, now_playing_updates = queue_env
+        qm.queue = [_make_queue_item(1), _make_queue_item(2)]
+        mock_get_instance.return_value = mock_karaoke
+
+        response = client_with_session.post("/api/queue/pitch?song=/songs/song1.mp4&semitones=4")
+
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        assert qm.queue[0]["semitones"] == 4
+        assert len(now_playing_updates) == 1, "now_playing_update event should be emitted once"
+
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_queue_pitch_saves_the_key_for_the_singer(
+        self, mock_get_instance, client_with_session, queue_env
+    ):
+        """The key is remembered against whoever queued the song, not the slot."""
+        qm, mock_karaoke, _queue_updates, _now_playing_updates = queue_env
+        qm.queue = [_make_queue_item(1)]
+        mock_get_instance.return_value = mock_karaoke
+
+        client_with_session.post("/api/queue/pitch?song=/songs/song1.mp4&semitones=4")
+
+        mock_karaoke.singer_manager.save_key.assert_called_once_with("User1", "/songs/song1.mp4", 4)
+
+    @patch("pikaraoke.routes.queue_api.get_karaoke_instance")
+    def test_queue_pitch_on_an_unqueued_song_saves_nothing(
+        self, mock_get_instance, client_with_session, queue_env
+    ):
+        qm, mock_karaoke, _queue_updates, _now_playing_updates = queue_env
+        mock_get_instance.return_value = mock_karaoke
+
+        response = client_with_session.post("/api/queue/pitch?song=/songs/gone.mp4&semitones=4")
+
+        assert response.get_json()["success"] is False
+        mock_karaoke.singer_manager.save_key.assert_not_called()

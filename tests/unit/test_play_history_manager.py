@@ -7,6 +7,7 @@ import pytest
 from pikaraoke.lib.events import EventSystem
 from pikaraoke.lib.karaoke_database import KaraokeDatabase
 from pikaraoke.lib.play_history_manager import STALE_SESSION_HOURS, PlayHistoryManager
+from pikaraoke.lib.singer_manager import SingerManager
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def events():
 
 @pytest.fixture
 def history(db, events):
-    return PlayHistoryManager(db=db, events=events)
+    return PlayHistoryManager(db=db, events=events, singers=SingerManager(db, events, lambda p: p))
 
 
 @pytest.fixture
@@ -442,6 +443,16 @@ class TestTranspose:
         assert len(history.get_plays()) == 1
         assert history.get_top_songs()[0]["play_count"] == 1
 
+    def test_recue_restart_does_not_log_a_second_play(self, history, events, song_id):
+        """A re-cue restart (autoplay off) holds the open play like a transpose."""
+        history.record_play(song_id, None, "Alice", "A Song")
+        events.emit("song_ended", "restart")
+        history.record_play(song_id, None, "Alice", "A Song")  # restarts on manual Play
+        events.emit("song_ended", "complete")
+
+        assert len(history.get_plays()) == 1
+        assert history.get_top_songs()[0]["play_count"] == 1
+
     def test_transpose_keeps_the_play_resolvable(self, history, events, song_id):
         history.record_play(song_id, None, "Alice", "A Song")
         events.emit("song_ended", "transpose")
@@ -648,8 +659,8 @@ class TestGetSingers:
 
         assert len(history.get_singers(limit=50)) == 2
 
-    def test_limit_still_resolves_latest_casing(self, history, song_id):
-        """Casing is resolved after the cap is applied, so it must survive it."""
+    def test_capped_ranking_shows_the_latest_casing(self, history, song_id):
+        """A later casing of a name wins, and survives the cap being applied."""
         history.record_play(song_id, None, "mike", "A Song")
         history.record_play(song_id, None, "Mike", "A Song")
 
@@ -847,11 +858,16 @@ class TestOrphanedPlays:
     as playing for ever."""
 
     def test_startup_closes_a_play_left_open(self, db, events, song_id):
-        first = PlayHistoryManager(db=db, events=events)
+        first = PlayHistoryManager(
+            db=db, events=events, singers=SingerManager(db, events, lambda p: p)
+        )
         first.record_play(song_id, None, "Alice", "A Song")
         assert first.get_plays()[0]["has_ended"] == 0
 
-        restarted = PlayHistoryManager(db=db, events=EventSystem())
+        events2 = EventSystem()
+        restarted = PlayHistoryManager(
+            db=db, events=events2, singers=SingerManager(db, events2, lambda p: p)
+        )
 
         # Marked the same way as a skip, so reaching it takes the same opt-in.
         play = restarted.get_plays(include_skipped=True)[0]
@@ -860,16 +876,44 @@ class TestOrphanedPlays:
         assert play["completed"] == 0
 
     def test_startup_leaves_resolved_plays_alone(self, db, events, song_id):
-        first = PlayHistoryManager(db=db, events=events)
+        first = PlayHistoryManager(
+            db=db, events=events, singers=SingerManager(db, events, lambda p: p)
+        )
         first.record_play(song_id, None, "Alice", "A Song")
         events.emit("song_ended", "complete")
         before = first.get_plays()[0]
 
-        restarted = PlayHistoryManager(db=db, events=EventSystem())
+        events2 = EventSystem()
+        restarted = PlayHistoryManager(
+            db=db, events=events2, singers=SingerManager(db, events2, lambda p: p)
+        )
 
         after = restarted.get_plays()[0]
         assert after["completed"] == 1
         assert after["played_at"] == before["played_at"]
+
+
+class TestStartupBackfill:
+    """Starting up must give a pre-singers history its singer rows, or the
+    joins every report now runs would silently drop the unlinked plays."""
+
+    def _legacy_play(self, db, performer):
+        session_id = db.execute("INSERT INTO sessions (uuid) VALUES ('s1')").lastrowid
+        db.execute(
+            "INSERT INTO plays (session_id, song_title, performer) VALUES (?, 'A Song', ?)",
+            (session_id, performer),
+        )
+
+    def test_startup_links_plays_recorded_before_singers_existed(self, db, events):
+        self._legacy_play(db, "Beyonce")
+
+        history = PlayHistoryManager(
+            db=db, events=events, singers=SingerManager(db, events, lambda p: p)
+        )
+
+        # The join would hide an unlinked play, so its presence here is the proof.
+        assert [p["performer"] for p in history.get_plays()] == ["Beyonce"]
+        assert [s["performer"] for s in history.get_singers()] == ["Beyonce"]
 
 
 class TestGetPlays:
@@ -1233,6 +1277,41 @@ class TestClearHistory:
     def test_clearing_an_unknown_session(self, history):
         assert history.clear_session_plays("no-such-uuid") is False
 
+    def test_clearing_a_singer_takes_only_their_plays(self, history, song_id):
+        history.start_session("Tonight")
+        history.record_play(song_id, None, "Alice", "A Song")
+        history.record_play(song_id, None, "Bob", "A Song")
+        alice = history.singers.find("Alice")["id"]
+
+        history.clear_singer_plays(alice)
+
+        # Bob's play, and the session, both stand.
+        assert [p["performer"] for p in history.get_plays()] == ["Bob"]
+        assert history.get_current_session()["name"] == "Tonight"
+
+    def test_clearing_a_singer_unblocks_deleting_them(self, history, song_id):
+        """The point of the method: a play blocks the row delete until it is gone.
+        The two real managers together are what Karaoke.delete_singer orders."""
+        history.record_play(song_id, None, "Alice", "A Song")
+        alice = history.singers.find("Alice")["id"]
+
+        history.clear_singer_plays(alice)
+
+        assert history.singers.delete_singer("Alice") is True
+        assert history.singers.find("Alice") is None
+
+    def test_clearing_a_singer_forgets_their_in_flight_play(self, history, events, song_id):
+        """As a reset does: with the open row gone, a transpose restart has
+        nothing to reuse, so the song on screen must still record a play."""
+        history.record_play(song_id, None, "Alice", "A Song")
+        alice = history.singers.find("Alice")["id"]
+        history.clear_singer_plays(alice)
+        events.emit("song_ended", "transpose")
+
+        history.record_play(song_id, None, "Alice", "A Song")
+
+        assert [p["performer"] for p in history.get_plays()] == ["Alice"]
+
     def test_reset_removes_every_session_and_play(self, history, song_id):
         history.start_session("One")
         history.record_play(song_id, None, "Alice", "A Song")
@@ -1366,3 +1445,27 @@ class TestSessionChangedEvent:
         names.clear()
         assert action(history) is False
         assert names == []
+
+
+class TestRenameCurrentPerformer:
+    def test_moves_a_matching_marker_case_insensitively(self, history):
+        history._current_performer = "Dvae"
+        history.rename_current_performer("dvae", "Davey")
+        assert history._current_performer == "Davey"
+
+    def test_leaves_a_different_name_alone(self, history):
+        history._current_performer = "Other"
+        history.rename_current_performer("Dvae", "Davey")
+        assert history._current_performer == "Other"
+
+    def test_a_transpose_after_a_mid_song_rename_reuses_the_open_row(
+        self, history, events, song_id
+    ):
+        history.record_play(song_id, None, "Dvae", "A")
+        # A transpose ends the stream but holds the play row open.
+        events.emit("song_ended", "transpose")
+        history.rename_current_performer("Dvae", "Davey")
+        # The restart under the new name must reuse the row, not log a second play.
+        history.record_play(song_id, None, "Davey", "A")
+        events.emit("song_ended", "complete")
+        assert len(history.get_plays()) == 1

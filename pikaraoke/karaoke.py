@@ -15,6 +15,7 @@ from qrcode.image.pure import PyPNGImage
 
 from pikaraoke.lib.audio_outputs import AudioOutputs
 from pikaraoke.lib.download_manager import DownloadManager
+from pikaraoke.lib.duration_populator import DurationPopulator
 from pikaraoke.lib.events import EventSystem
 from pikaraoke.lib.ffmpeg import (
     get_ffmpeg_version,
@@ -34,7 +35,8 @@ from pikaraoke.lib.network import get_ip
 from pikaraoke.lib.play_history_manager import PlayHistoryManager
 from pikaraoke.lib.playback_controller import PlaybackController
 from pikaraoke.lib.preference_manager import PreferenceManager
-from pikaraoke.lib.queue_manager import QueueManager
+from pikaraoke.lib.queue_manager import PLACEHOLDER_SINGERS, QueueManager
+from pikaraoke.lib.singer_manager import SingerManager, normalize_name
 from pikaraoke.lib.song_manager import SongManager
 from pikaraoke.lib.sound_manager import SoundManager
 from pikaraoke.lib.url_prefix import append_base_path_to_url
@@ -66,9 +68,9 @@ class Karaoke:
     song_manager: SongManager
     queue_manager: QueueManager
     playback_controller: PlaybackController
+    singer_manager: SingerManager
     play_history: PlayHistoryManager
 
-    now_playing_notification: str | None = None
     volume: float
 
     qr_code_path: str | None = None
@@ -310,8 +312,28 @@ class Karaoke:
             get_turns_taken=lambda: self.play_history.get_turns_taken(),
         )
 
+        # Singers own the one row per performer that plays and favourites hang
+        # off; play history resolves names through it and backfills it on start.
+        self.singer_manager = SingerManager(
+            db=self.db,
+            events=self.events,
+            song_display_name=self.song_manager.display_name_from_path,
+        )
+
         # Play history recording and reporting (subscribes to song_ended itself)
-        self.play_history = PlayHistoryManager(db=self.db, events=self.events)
+        self.play_history = PlayHistoryManager(
+            db=self.db, events=self.events, singers=self.singer_manager
+        )
+
+        # Fills songs.duration as songs are played and queued (subscribes itself).
+        self.duration_populator = DurationPopulator(
+            db=self.db,
+            events=self.events,
+            get_now_playing=lambda: (
+                self.playback_controller.now_playing_filename,
+                self.playback_controller.now_playing_duration,
+            ),
+        )
 
         # Initialize and start download manager
         self.download_manager = DownloadManager(
@@ -490,16 +512,12 @@ class Karaoke:
             color: Bulma color class (primary, warning, success, danger).
         """
         # Color should be bulma compatible: primary, warning, success, danger
-        hide_notifications = self.preferences.get_or_default("hide_notifications")
-        if not hide_notifications:
-            # don't allow new messages to clobber existing commands, one message at a time
-            # other commands have a higher priority
-            if self.now_playing_notification != None:
-                return
-            self.now_playing_notification = message + "::is-" + color
-            # Emit notification via SocketIO for event-driven architecture
-            if self.socketio:
-                self.socketio.emit("notification", self.now_playing_notification, namespace="/")
+        if self.preferences.get_or_default("hide_notifications"):
+            return
+        # The splash stacks notifications client-side, so the server just fires
+        # and keeps no slot to hold or clear.
+        if self.socketio:
+            self.socketio.emit("notification", f"{message}::is-{color}", namespace="/")
 
     def log_and_send(self, message: str, category: str = "info") -> None:
         """Log a message and send it as a notification.
@@ -545,32 +563,160 @@ class Karaoke:
             self.events.emit("queue_update")
         return new_path
 
+    def rename_singer(self, old_name: str, new_name: str) -> str:
+        """Move a singer's name across the queue, the screen, history and their row.
+
+        One operation, beside rename_song() and for the same reason: only here
+        can the queue, the song on screen and the stored singer be reached
+        together. Returns the outcome for the route to answer with:
+
+          "renamed"  -- old_name owned something, moved onto the free new_name.
+          "adopt"    -- old_name owned nothing to move; the device simply takes
+                        new_name (a plain cookie write, no server state changed).
+          "taken"    -- new_name already belongs to another singer who owns data:
+                        that is a merge, which is the admin's, so this refuses.
+          "reserved" -- a placeholder system name on either side.
+
+        The route enforces that old_name is the caller's own cookie, so a rename
+        is always the singer re-homing their own device; the blank-name refusal
+        lives in the route schema.
+        """
+        old_name = normalize_name(old_name)
+        new_name = normalize_name(new_name)
+        if old_name.lower() in PLACEHOLDER_SINGERS or new_name.lower() in PLACEHOLDER_SINGERS:
+            return "reserved"
+
+        casing_only = old_name.lower() == new_name.lower()
+        old_singer = self.singer_manager.find(old_name)
+        new_singer = self.singer_manager.find(new_name)
+
+        with self._playback_lock:
+            now_playing_matches = (
+                self.playback_controller.now_playing_user or ""
+            ).lower() == old_name.lower()
+
+            # new_name is a different singer that already exists: a merge.
+            if (
+                not casing_only
+                and new_singer is not None
+                and (old_singer is None or new_singer["id"] != old_singer["id"])
+            ):
+                owns = (
+                    old_singer is not None
+                    or now_playing_matches
+                    or self.queue_manager.has_user(old_name)
+                )
+                # A name with data cannot climb onto another (that is the admin's
+                # merge); a name with nothing just adopts the existing singer.
+                return "taken" if owns else "adopt"
+
+            # new_name is free, or this is a change of casing: move everything.
+            if old_singer is not None:
+                self.singer_manager.rename(old_name, new_name)
+            moved = self.queue_manager.rename_singer(old_name, new_name)
+            if now_playing_matches:
+                self.playback_controller.now_playing_user = new_name
+            self.play_history.rename_current_performer(old_name, new_name)
+            owned = old_singer is not None or now_playing_matches or moved > 0
+
+        if not owned:
+            # Nothing moved: the device is just naming itself, stage A's behaviour.
+            return "adopt"
+        self.events.emit("queue_update")
+        self.events.emit("now_playing_update")
+        self.events.emit("play_logged")
+        return "renamed"
+
+    def merge_singers(self, loser_name: str, survivor_name: str) -> str:
+        """Fold one singer into another -- the admin's irreversible identity-collapse.
+
+        Beside rename_singer() and under the same lock, reaching the queue, the
+        screen and the stored singer together. Unlike a rename it writes no
+        cookie, which is why it can be the admin's: a device left on the loser's
+        name is caught by the tombstone on its next queue-add. Returns "merged",
+        "reserved" (a placeholder on either side) or "unknown" (not a live singer).
+        """
+        loser_name = normalize_name(loser_name)
+        survivor_name = normalize_name(survivor_name)
+        if (
+            loser_name.lower() in PLACEHOLDER_SINGERS
+            or survivor_name.lower() in PLACEHOLDER_SINGERS
+        ):
+            return "reserved"
+
+        with self._playback_lock:
+            # Validates both names before anything on the queue or screen moves.
+            if not self.singer_manager.merge(loser_name, survivor_name):
+                return "unknown"
+            self.queue_manager.rename_singer(loser_name, survivor_name)
+            if (self.playback_controller.now_playing_user or "").lower() == loser_name.lower():
+                self.playback_controller.now_playing_user = survivor_name
+            self.play_history.rename_current_performer(loser_name, survivor_name)
+
+        self.events.emit("queue_update")
+        self.events.emit("now_playing_update")
+        self.events.emit("play_logged")
+        return "merged"
+
+    def delete_singer(self, name: str) -> bool:
+        """Erase a singer and all their plays -- the admin's irreversible removal.
+
+        Beside merge_singers(), but with no survivor to carry anything onto: the
+        singer's plays are destroyed outright, along with the favourites,
+        preferences and tombstones their row cascades away. Plays go first --
+        the row cannot be removed while one still points at it, plays.singer_id
+        having no delete-cascade -- so the system-name refusal has to come
+        before that, or a placeholder like Randomizer would have its plays wiped
+        before the row delete declined. Returns True when the singer was removed.
+        """
+        name = normalize_name(name)
+        if name.lower() in PLACEHOLDER_SINGERS:
+            return False
+        singer = self.singer_manager.find(name)
+        if singer is None:
+            return False
+        self.play_history.clear_singer_plays(singer["id"])
+        self.singer_manager.delete_singer(name)
+        # Open report pages re-read their counts; the in-flight play, if it was
+        # theirs, was forgotten as the plays were cleared.
+        self.events.emit("play_logged")
+        return True
+
+    def _recue_current(self, semitones: int, reason: str) -> bool:
+        """Re-enqueue the playing song at the head and end its stream.
+
+        The skip reason holds the play-history row open so this is not logged as
+        a second play. Returns False if nothing is playing or the queue refused it.
+        """
+        filename = self.playback_controller.now_playing_filename
+        user = self.playback_controller.now_playing_user
+        if filename is None or user is None:
+            return False
+        queued, message = self.queue_manager.enqueue(filename, user, semitones, True)
+        if not queued:
+            # Skipping a refused requeue would strand the singer with nothing to restart.
+            self.log_and_send(str(message), "danger")
+            return False
+        self.playback_controller.skip(log_action=False, reason=reason)
+        return True
+
     def transpose_current(self, semitones: int) -> None:
-        """Restart the current song with a new transpose value.
+        """Restart the current song in a new key and remember it for the singer.
 
         Args:
             semitones: Number of semitones to transpose.
         """
-        filename = self.playback_controller.now_playing_filename
-        user = self.playback_controller.now_playing_user
         now_playing = self.playback_controller.now_playing
-
-        if filename is None or user is None:
+        if now_playing is None:
             logging.warning("Cannot transpose: no song currently playing")
             return
-        # Insert the same song at the top of the queue with transposition.
-        # The stream ends but the performance does not, so play history keeps
-        # the existing play open rather than logging a second one.
-        queued, message = self.queue_manager.enqueue(filename, user, semitones, True)
-        if not queued:
-            # Skipping now would end the song with nothing to restart it: the
-            # singer loses their turn, and play history holds the play open
-            # waiting for a restart that is never coming.
-            self.log_and_send(str(message), "danger")
-            return
-        # MSG: Message shown after the song is transposed, first is the semitones and then the song name
-        self.log_and_send(_("Transposing by %s semitones: %s") % (semitones, now_playing))
-        self.playback_controller.skip(log_action=False, reason="transpose")
+        # _recue_current clears now-playing state, so read it first.
+        filename = self.playback_controller.now_playing_filename
+        user = self.playback_controller.now_playing_user
+        if self._recue_current(semitones, "transpose"):
+            self.singer_manager.save_key(user, filename, semitones)
+            # MSG: Message shown after the song is transposed, first is the semitones and then the song name
+            self.log_and_send(_("Transposing by %s semitones: %s") % (semitones, now_playing))
 
     def volume_change(self, vol_level: float) -> bool:
         """Set the volume level.
@@ -599,21 +745,41 @@ class Karaoke:
         self.volume_change(new_vol)
         logging.debug(f"Decreasing volume by 10%: {self.volume}")
 
-    def restart(self) -> bool:
-        """Restart the current song from the beginning.
+    def skip(self) -> bool:
+        """Skip the current song, or drop the song cued to start when autoplay is off.
 
-        Returns:
-            True if successful, False if nothing playing.
+        With autoplay off a song waits at the head of the queue, not yet popped,
+        so skipping it is a queue removal. Either way the room is told, reusing
+        the playing skip's notification.
+
+        Returns True if a song was skipped, False if nothing is playing or queued.
         """
         if self.playback_controller.is_playing:
-            now_playing = self.playback_controller.now_playing
+            return self.playback_controller.skip()
+        if not self.queue_manager.queue:
+            logging.warning("Tried to skip, but nothing is playing or queued!")
+            return False
+        cued = self.queue_manager.queue[0]
+        # MSG: Message shown after the song is skipped, will be followed by song name
+        self.events.emit("notification", _("Skip: %s") % cued["title"], "info")
+        return self.queue_manager.queue_edit(cued["file"], "delete")
+
+    def restart(self) -> bool:
+        """Restart the current song, or re-cue it to wait when autoplay is off.
+
+        Returns True if an action was taken, False if nothing is playing.
+        """
+        if not self.playback_controller.is_playing:
+            logging.warning("Tried to restart, but no file is playing!")
+            return False
+        now_playing = self.playback_controller.now_playing
+        if self.preferences.get_or_default("autoplay"):
             logging.info("Restarting: " + (now_playing or "unknown song"))
             self.playback_controller.restart()
             self.update_now_playing_socket()
             return True
-        else:
-            logging.warning("Tried to restart, but no file is playing!")
-            return False
+        logging.info("Re-cueing to wait: " + (now_playing or "unknown song"))
+        return self._recue_current(self.playback_controller.now_playing_transpose, "restart")
 
     def stop(self) -> None:
         """Stop the karaoke run loop."""
@@ -624,10 +790,6 @@ class Karaoke:
     def handle_run_loop(self) -> None:
         """Handle one iteration of the main run loop with a sleep interval."""
         time.sleep(self.loop_interval / 1000)
-
-    def reset_now_playing_notification(self) -> None:
-        """Clear the current notification."""
-        self.now_playing_notification = None
 
     def reset_now_playing(self) -> None:
         """Reset all now playing state to defaults."""
@@ -643,6 +805,10 @@ class Karaoke:
         """
         queue = self.queue_manager.queue
         next_song = queue[0] if queue else None
+        # The song behind the queue head. While a song plays, the head is the next
+        # to play and this is the one after; when a song waits to start, the head
+        # IS that waiting song, so this is what Home shows as "next".
+        following_song = queue[1] if len(queue) > 1 else None
 
         # Get playback state from PlaybackController
         playback_state = self.playback_controller.get_now_playing()
@@ -651,6 +817,16 @@ class Karaoke:
             **playback_state,
             "up_next": next_song["title"] if next_song else None,
             "next_user": next_song["user"] if next_song else None,
+            # Drive the waiting-song panel: the control box when autoplay is off,
+            # showing and setting the key the next song will start in.
+            "autoplay": self.preferences.get_or_default("autoplay"),
+            "up_next_file": next_song["file"] if next_song else None,
+            "up_next_transpose": next_song["semitones"] if next_song else 0,
+            # The cued song's length, so the focus bar reads before it starts;
+            # None until the row is filled, where the bar stays an empty track.
+            "up_next_duration": self.db.get_duration(next_song["file"]) if next_song else None,
+            "next_after": following_song["title"] if following_song else None,
+            "next_after_user": following_song["user"] if following_song else None,
             "volume": self.volume,
             # The splash screen never reloads, so the session name rides this
             # payload rather than being rendered once at page load.
@@ -708,15 +884,22 @@ class Karaoke:
                     logging.info("Playback state out of sync, resetting")
                     self.reset_now_playing()
 
-                # Start next song from queue if not currently playing
-                if len(self.queue_manager.queue) > 0 and not self.playback_controller.is_playing:
+                # Start next song from queue if not currently playing. With
+                # autoplay off, the head of the queue waits for a manual start.
+                autoplay = self.preferences.get_or_default("autoplay")
+                if (
+                    len(self.queue_manager.queue) > 0
+                    and not self.playback_controller.is_playing
+                    and (autoplay or self.playback_controller.start_requested)
+                ):
                     self.reset_now_playing()
-                    # Splash delay between songs
-                    splash_delay = self.preferences.get_or_default("splash_delay")
-                    i = 0
-                    while i < (splash_delay * 1000):
-                        self.handle_run_loop()
-                        i += self.loop_interval
+                    # Splash delay between songs, skipped for the human-driven manual wait
+                    if autoplay:
+                        splash_delay = self.preferences.get_or_default("splash_delay")
+                        i = 0
+                        while i < (splash_delay * 1000):
+                            self.handle_run_loop()
+                            i += self.loop_interval
 
                     # Pop song before playback to avoid UI flicker. Released
                     # before play_file, which sleeps for seconds while transcoding.

@@ -10,7 +10,6 @@
     const config = {
         contentSelector: '.box',
         linkSelector: 'a[href]', // Intercept all links, not just navbar
-        notificationSelector: '#notification-alt',
         scrollBehavior: 'smooth'
     };
 
@@ -55,6 +54,170 @@
     let currentPath = window.location.pathname + window.location.search;
     let loadedResources = new Set(); // Track loaded external resources
     let isInitialized = false; // Prevent multiple initializations
+
+    // Page-scoped socket listeners, dropped on the next navigation. The SPA
+    // re-runs each page's script, so a plain bind would stack duplicates.
+    let pageSocketSubs = [];
+
+    // Subscribe to a socket event for the current page only. base.html's
+    // permanent handlers use window.socket.on instead.
+    window.onPageSocket = function (event, handler) {
+        window.socket.on(event, handler);
+        pageSocketSubs.push([event, handler]);
+        return handler;
+    };
+
+    // One source of truth for the now-playing indicator the home, queue and
+    // history pages each draw: a song is playing when one is loaded and not paused.
+    window.isNowPlaying = function (np) {
+        return !!(np && np.now_playing && !np.is_paused);
+    };
+
+    // Reusable clickable text-prompt over #text-prompt-modal. Resolves a
+    // $.Deferred with the trimmed input on save, rejects on cancel/Escape/
+    // background. $.Deferred not a Promise: cancel is normal, and a rejected
+    // Promise with no .catch() logs on every dismissal.
+    window.promptForText = function (opts) {
+        opts = opts || {};
+        const d = $.Deferred();
+        const $modal = $('#text-prompt-modal');
+        if (!$modal.length) {
+            // No dialog on this page (the chromeless splash renders none).
+            return d.reject();
+        }
+        const $input = $('#text-prompt-input');
+        const $ok = $('#text-prompt-ok');
+        const $secondary = $('#text-prompt-secondary');
+
+        $('#text-prompt-title').text(opts.title || '');
+        $('#text-prompt-message').text(opts.message || '').toggleClass('is-hidden', !opts.message);
+        $('#text-prompt-label').text(opts.label || '').toggleClass('is-hidden', !opts.label);
+        $('#text-prompt-help').text(opts.help || '').toggleClass('is-hidden', !opts.help);
+        $input.val(opts.value || '').attr('placeholder', opts.placeholder || '');
+        // Null clears it, so a cap never leaks into another caller of this prompt.
+        $input.attr('maxlength', opts.maxlength || null);
+        if (opts.submitLabel) { $ok.text(opts.submitLabel); }
+        // A left-pushed quiet action (e.g. log out), shown only when the caller
+        // asks for one, with an optional leading icon; its click rejects with
+        // { secondary: true } so the caller tells it apart from a plain cancel.
+        $secondary.toggleClass('is-hidden', !opts.secondaryLabel).empty();
+        if (opts.secondaryLabel) {
+            if (opts.secondaryIcon) {
+                $secondary.append($('<span class="icon">').append($('<i>').addClass('ph ' + opts.secondaryIcon)));
+            }
+            $secondary.append($('<span>').text(opts.secondaryLabel));
+        }
+
+        // Namespaced so a prior, unclosed prompt leaves no handler behind.
+        function teardown() {
+            $modal.removeClass('is-active');
+            $ok.off('.prompt');
+            $secondary.off('.prompt');
+            $modal.find('.text-prompt-cancel, .modal-background').off('.prompt');
+            $input.off('.prompt');
+        }
+        function accept() {
+            const value = $input.val().trim();
+            if (!value) {
+                return; // Save stays inert on a blank name.
+            }
+            teardown();
+            d.resolve(value);
+        }
+        function dismiss() {
+            teardown();
+            d.reject();
+        }
+        function chooseSecondary() {
+            teardown();
+            d.reject({ secondary: true });
+        }
+
+        $ok.on('click.prompt', accept);
+        $secondary.on('click.prompt', chooseSecondary);
+        $modal.find('.text-prompt-cancel, .modal-background').on('click.prompt', dismiss);
+        $input.on('keydown.prompt', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                accept();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                dismiss();
+            }
+        });
+        $input.on('input.prompt', function () {
+            $ok.prop('disabled', !$input.val().trim());
+        });
+
+        $ok.prop('disabled', !$input.val().trim());
+        $modal.addClass('is-active');
+        $input.trigger('focus').trigger('select');
+        return d;
+    };
+
+    // Reusable clickable confirm over #confirm-modal, the yes/no companion to
+    // promptForText. Resolves on confirm, rejects on cancel/Escape/background, so
+    // callers attach .done() and leave .fail() off. danger reddens the confirm
+    // and focuses cancel, so a stray Enter cannot fire a destructive action.
+    // confirmIcon names a Phosphor glyph shown on the confirm button.
+    window.confirmAction = function (opts) {
+        opts = opts || {};
+        const d = $.Deferred();
+        const $modal = $('#confirm-modal');
+        if (!$modal.length) {
+            return d.reject();
+        }
+        const $ok = $('#confirm-ok');
+        const $cancel = $modal.find('.confirm-cancel');
+
+        $('#confirm-title').text(opts.title || '');
+        $('#confirm-message').text(opts.message || '').toggleClass('is-hidden', !opts.message);
+        // An irreversibility line, set apart from the question so it is read on
+        // its own rather than tailing the sentence. The text has its own span so
+        // the icon beside it survives the rewrite.
+        $('#confirm-warning-text').text(opts.warning || '');
+        $('#confirm-warning').toggleClass('is-hidden', !opts.warning);
+        $('#confirm-ok-text').text(opts.confirmLabel || '');
+        // Whole-class rewrite so no earlier glyph lingers.
+        const $okIcon = $('#confirm-ok-icon');
+        $okIcon.find('i').attr('class', opts.confirmIcon ? 'ph ' + opts.confirmIcon : 'ph');
+        $okIcon.toggleClass('is-hidden', !opts.confirmIcon);
+        // Primary when not danger, so it never reads as the plain Cancel.
+        $ok.toggleClass('is-danger', !!opts.danger).toggleClass('is-primary', !opts.danger);
+
+        function teardown() {
+            $modal.removeClass('is-active');
+            $ok.off('.confirm');
+            $cancel.off('.confirm');
+            $modal.find('.modal-background').off('.confirm');
+            $(document).off('keydown.confirm');
+        }
+        function accept() { teardown(); d.resolve(); }
+        function dismiss() { teardown(); d.reject(); }
+
+        $ok.on('click.confirm', accept);
+        $cancel.on('click.confirm', dismiss);
+        $modal.find('.modal-background').on('click.confirm', dismiss);
+        $(document).on('keydown.confirm', function (e) {
+            if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+        });
+
+        $modal.addClass('is-active');
+        // A focused button answers Enter natively, so focusing cancel on a danger
+        // dialog is what keeps Enter from confirming it.
+        (opts.danger ? $modal.find('footer .confirm-cancel') : $ok).trigger('focus');
+        return d;
+    };
+
+    // Identity wrapper: resolves { name } so a later language or avatar is an
+    // added key, not a changed return shape.
+    window.promptForIdentity = function (opts) {
+        const d = $.Deferred();
+        window.promptForText(opts)
+            .done(function (name) { d.resolve({ name: name }); })
+            .fail(function (reason) { d.reject(reason); });
+        return d;
+    };
 
     /**
      * Initialize SPA navigation
@@ -105,6 +268,15 @@
             $('.navbar-burger').toggleClass('is-active');
             $('.navbar-menu').toggleClass('is-active');
         });
+
+        // Close the open menu on a click outside it or the burger.
+        $(document).off('click.navbarOutside');
+        $(document).on('click.navbarOutside', function(e) {
+            if (!$('.navbar-menu').hasClass('is-active')) return;
+            if ($(e.target).closest('.navbar-menu, .navbar-burger').length) return;
+            $('.navbar-burger').removeClass('is-active');
+            $('.navbar-menu').removeClass('is-active');
+        });
     }
 
     /**
@@ -113,29 +285,92 @@
      */
     function initUsernameHandler() {
         // Remove any existing handlers first to avoid duplicates
-        $(document).off('click', '#current-user');
+        $(document).off('click', '.js-open-identity');
 
-        // Bind with event delegation
-        $(document).on('click', '#current-user', function(e) {
+        // Bind with event delegation. The class, not the id, is the hook: the
+        // navbar item and the Home idle "Join in" link both carry it and open
+        // the one dialog. #current-user keeps its id for setCurrentUser.
+        $(document).on('click', '.js-open-identity', function(e) {
             e.preventDefault();
-            // Get the current name from the cookie dynamically
-            let currentName = Cookies.get("user");
-            var promptMsg = (window.translations && window.translations.promptChangeUsername)
-                ? window.translations.promptChangeUsername.replace('{name}', currentName)
-                : "Do you want to change the name of the person using this device? This will show up on queued songs. Current: " + currentName;
-            let name = window.prompt(promptMsg);
-            // Only update if user clicked OK and entered a non-empty name
-            // null = Cancel clicked, "" = OK with empty input
-            if (name !== null && name.trim() !== "") {
-                Cookies.set("user", name, {
-                    expires: 3650,
-                    path: window.pikaraokeConfig.cookiePath
-                });
-                // Update the displayed name without reloading
-                $("#current-user span").text(name);
-            }
+            const currentName = Cookies.get("user") || "";
+            const joining = !currentName;
+            const t = window.translations;
+            window.promptForIdentity({
+                title: joining ? t.identityJoinTitle : t.identityProfileTitle,
+                label: t.usernameLabel,
+                // Under the field: the privacy note when joining, the warning that
+                // a save renames you everywhere when editing an existing name.
+                help: joining ? t.usernameHelp : t.identityRenameNote,
+                placeholder: t.usernamePlaceholder,
+                maxlength: window.pikaraokeConfig.singerNameMaxLength,
+                submitLabel: joining ? t.identityJoinAction : t.identityProfileAction,
+                // Log out clears the name on this device and nothing else; offered
+                // only when there is a name to clear.
+                secondaryLabel: joining ? null : t.identityLogout,
+                secondaryIcon: joining ? null : 'ph-sign-out',
+                value: currentName
+            }).done(function (res) {
+                if (joining) {
+                    // Naming an anonymous device: a plain cookie write, no move.
+                    if (window.setIdentity(res.name) && window.spaNavigation) {
+                        window.spaNavigation.rerender();
+                    }
+                } else {
+                    changeIdentity(currentName, res.name);
+                }
+            }).fail(function (reason) {
+                if (reason && reason.secondary) {
+                    logout();
+                }
+            });
             // Remove focus from the link to prevent CSS focus styling (black background)
             $(this).blur();
+        });
+    }
+
+    /**
+     * Clear the name on this device: forget the cookie, revert the navbar to
+     * "Join in" and re-render so the server redraws the page with no singer. A
+     * local act only -- the singer's stored data is untouched and reappears when
+     * the name is typed again.
+     */
+    function logout() {
+        Cookies.remove('user', { path: window.pikaraokeConfig.cookiePath });
+        window.clearCurrentUser();
+        if (window.spaNavigation) {
+            window.spaNavigation.rerender();
+        }
+    }
+
+    /**
+     * Rename the singer this device is holding. The server moves the queue, the
+     * song on screen, history and favourites onto the new name and says what it
+     * did; this device's cookie follows on success. A name already owned by
+     * another singer is refused -- that collapse is the KJ's to make.
+     * @param {string} oldName - The name currently in the cookie
+     * @param {string} newName - The name the singer typed
+     */
+    function changeIdentity(oldName, newName) {
+        const t = window.translations;
+        $.ajax({
+            url: window.pikaraokeConfig.renameUrl,
+            method: 'POST',
+            data: { old_name: oldName, new_name: newName }
+        }).done(function (resp) {
+            if (!resp || !resp.success) {
+                return;
+            }
+            const changed = window.setIdentity(resp.name);
+            if (resp.action === 'renamed') {
+                window.showNotification(t.identityRenamed.replace('{name}', resp.name), 'is-success');
+            }
+            if (changed && window.spaNavigation) {
+                window.spaNavigation.rerender();
+            }
+        }).fail(function (xhr) {
+            // The server names the reason (taken, reserved, not yours); show it.
+            const err = xhr.responseJSON && xhr.responseJSON.error;
+            window.showNotification(err || t.errorLabel, 'is-warning');
         });
     }
 
@@ -152,25 +387,35 @@
         // Clear queue confirmation
         $(document).on('click', '.confirm-clear', function(e) {
             e.preventDefault();
-            var promptMsg = (window.translations && window.translations.promptClearQueue)
-                ? window.translations.promptClearQueue
-                : "Are you sure you want to clear the ENTIRE queue? Type 'ok' to continue";
-            let userInput = window.prompt(promptMsg);
-            // Only clear if user typed 'ok' exactly (case insensitive)
-            if (userInput !== null && userInput.toLowerCase() === "ok") {
-                $.post(this.href);
-            }
+            var href = this.href;
+            var t = window.translations || {};
+            window.confirmAction({
+                title: t.clearQueueTitle,
+                message: t.confirmClearQueue,
+                warning: t.cannotBeUndone,
+                confirmLabel: t.clearQueueAction,
+                confirmIcon: 'ph-trash',
+                danger: true
+            }).done(function () {
+                $.post(href);
+            });
         });
 
         // Delete song file from library confirmation (full page navigation)
         $(document).on('click', '.confirm-delete-file', function(e) {
             e.preventDefault();
-            var msg = (window.translations && window.translations.confirmDeleteFromLibrary)
-                ? window.translations.confirmDeleteFromLibrary
-                : 'Are you sure you want to delete this song from the library?';
-            if (window.confirm(msg)) {
-                window.postNavigate(this.href);
-            }
+            var href = this.href;
+            var t = window.translations || {};
+            window.confirmAction({
+                title: t.deleteSongTitle,
+                message: t.confirmDeleteFromLibrary,
+                warning: t.cannotBeUndone,
+                confirmLabel: t.deleteAction,
+                confirmIcon: 'ph-trash',
+                danger: true
+            }).done(function () {
+                window.postNavigate(href);
+            });
         });
 
         // Add random songs to queue
@@ -179,7 +424,7 @@
             const amount = $('#randomNumberInput').val();
             const baseUrl = `${window.pikaraokeConfig.basePath}/api/queue/addrandom`;
             $.post(`${baseUrl}/${amount}`, function (data) {
-                if (!data.success) showNotification(data.message, 'is-warning');
+                if (!data.success) window.showNotification(data.message, 'is-warning');
             });
         });
     }
@@ -333,9 +578,6 @@
 
                 // Update current path
                 currentPath = url;
-
-                // Show success notification (optional, can be commented out)
-                // showNotification('Page loaded', 'is-success', 500);
 
             } else {
                 console.error('Could not find content container in response');
@@ -536,29 +778,14 @@
         // Remove old event handlers on elements that will be replaced
         $(config.contentSelector).off();
 
-        // Note: We don't disconnect socket.io as it should persist across page changes
-        // The socket connection is maintained globally
-    }
-
-    /**
-     * Show a notification message
-     * @param {string} message
-     * @param {string} categoryClass
-     * @param {number} timeout
-     */
-    function showNotification(message, categoryClass, timeout = 3000) {
-        const notification = $(config.notificationSelector);
-        notification.addClass(categoryClass);
-        notification.find('div').text(message);
-        notification.fadeIn();
-
-        setTimeout(function() {
-            notification.fadeOut();
-        }, timeout);
-
-        setTimeout(function() {
-            notification.removeClass(categoryClass);
-        }, timeout + 750);
+        // Drop this page's socket listeners; the socket itself and base.html's
+        // permanent handlers persist.
+        pageSocketSubs.forEach(function (sub) {
+            if (window.socket) {
+                window.socket.off(sub[0], sub[1]);
+            }
+        });
+        pageSocketSubs = [];
     }
 
     window.spaNavigation = {

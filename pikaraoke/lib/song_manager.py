@@ -6,9 +6,11 @@ import os
 from collections.abc import Callable
 
 from pikaraoke.lib.events import EventSystem
+from pikaraoke.lib.ffmpeg import get_media_duration
 from pikaraoke.lib.karaoke_database import KaraokeDatabase
 from pikaraoke.lib.library_scanner import build_song_record
 from pikaraoke.lib.metadata_parser import (
+    normalize_for_comparison,
     regex_tidy,
     remove_accents,
     sanitize_filename,
@@ -69,7 +71,7 @@ class SongManager:
         self._db = db
         self._events = events
         self._get_title_tidy = get_title_tidy
-        self._index: list[tuple[str, str]] = []  # (accent-folded raw filename key, path)
+        self._index: list[tuple[str, str, str]] = []  # (raw key, normalised key, path)
         self._index_version: int | None = None
         self._folders: dict[str, list[str]] = {}  # folder key -> immediate subfolder names
         self._folders_version: int | None = None
@@ -117,21 +119,28 @@ class SongManager:
     # also makes the key independent of the enable_title_tidy preference.
     # ------------------------------------------------------------------
 
-    def _match_index(self) -> list[tuple[str, str]]:
-        """(accent-folded lowercase raw filename, path) pairs, rebuilt when the song list changes."""
+    def _match_index(self) -> list[tuple[str, str, str]]:
+        """(raw key, normalised key, path) triples, rebuilt when the song list changes.
+
+        Raw is the accent-folded lowercase stem; normalised folds its punctuation too.
+        """
         # Read the version BEFORE iterating: a mutation racing this rebuild then stores
         # newer data under an older version and rebuilds next call. Reading it after
         # would cache stale data under the new version and never rebuild.
         version = self.songs.version
         if self._index_version != version:
             self._index = [
-                (remove_accents(self.filename_from_path(p, tidy=False)).lower(), p)
+                (
+                    raw := remove_accents(self.filename_from_path(p, tidy=False)).lower(),
+                    normalize_for_comparison(raw),
+                    p,
+                )
                 for p in self.songs
             ]
             self._index_version = version
         return self._index
 
-    def _scoped_index(self, folder: str | None) -> list[tuple[str, str]]:
+    def _scoped_index(self, folder: str | None) -> list[tuple[str, str, str]]:
         """Match index entries, narrowed to one folder's direct children.
 
         `None` means the whole library; `""` means the download path itself. The
@@ -143,21 +152,24 @@ class SongManager:
             return index
         target = self.folder_path(folder)
         return [
-            (name, path)
-            for name, path in index
+            (raw, norm, path)
+            for raw, norm, path in index
             if os.path.dirname(os.path.normpath(path)) == target
         ]
 
     def search(self, query: str, folder: str | None = None) -> list[str]:
-        """Songs whose filename contains every whitespace-separated term, in list order."""
-        terms = remove_accents(query).lower().split()
+        """Songs whose filename contains every term, in list order.
+
+        Query and filename are both punctuation-folded, so `AC/DC` finds `AC-DC`.
+        """
+        terms = normalize_for_comparison(remove_accents(query)).split()
         index = self._scoped_index(folder)
         if not terms:
-            return [path for _, path in index]
+            return [path for _, _, path in index]
         if len(terms) == 1:
             term = terms[0]
-            return [path for name, path in index if term in name]
-        return [path for name, path in index if all(t in name for t in terms)]
+            return [path for _, norm, path in index if term in norm]
+        return [path for _, norm, path in index if all(t in norm for t in terms)]
 
     def songs_by_letter(self, letter: str, folder: str | None = None) -> list[str]:
         """Songs whose filename starts with `letter`, or with a digit when 'numeric'.
@@ -167,9 +179,9 @@ class SongManager:
         """
         index = self._scoped_index(folder)
         if letter == "numeric":
-            return [path for name, path in index if name[:1].isnumeric()]
+            return [path for raw, _, path in index if raw[:1].isnumeric()]
         target = letter.lower()
-        return [path for name, path in index if name[:1] == target]
+        return [path for raw, _, path in index if raw[:1] == target]
 
     # ------------------------------------------------------------------
     # Folders
@@ -225,8 +237,8 @@ class SongManager:
         if self._initials_version != version:
             initials: dict[str | None, set[str]] = {None: set()}
             prefix = os.path.normpath(self.download_path) + os.sep
-            for name, path in self._match_index():
-                first = name[:1]
+            for raw, _, path in self._match_index():
+                first = raw[:1]
                 if not first:
                     continue
                 key = "numeric" if first.isnumeric() else first
@@ -242,9 +254,25 @@ class SongManager:
             self._initials_version = version
         return self._initials.get(folder, set())
 
+    def letters_for(self, paths: set[str]) -> set[str]:
+        """Alpha-bar keys present among `paths`, a subset of the library.
+
+        Keyed like letters_with_songs -- 'numeric' for a leading digit, else the
+        accent-folded lowercase first character -- so the bar agrees with
+        songs_by_letter when the listing is narrowed to a subset, such as the
+        Favourites view. Not memoized: it runs only on a Favourites render, which
+        already pays one O(songs) pass to filter the set.
+        """
+        keys = set()
+        for raw, _, path in self._match_index():
+            first = raw[:1]
+            if first and path in paths:
+                keys.add("numeric" if first.isnumeric() else first)
+        return keys
+
     def songs_in_folder(self, folder: str) -> list[str]:
         """Songs sitting directly in `folder`, excluding its subfolders, in list order."""
-        return [path for _, path in self._scoped_index(folder)]
+        return [path for *_, path in self._scoped_index(folder)]
 
     def _get_companion_files(self, song_path: str) -> list[str]:
         """Return paths to companion files (.cdg, .mcg, .ass) that exist alongside a song."""
@@ -262,8 +290,21 @@ class SongManager:
                 companions.append(os.path.join(dirpath, f))
         return companions
 
+    def _require_in_library(self, song_path: str) -> None:
+        """Refuse a path that resolves outside `download_path`.
+
+        delete() and rename() take the path from the file routes, which a
+        no-password install serves to every client; realpath collapses "../"
+        and symlinks, normcase keeps it right where the filesystem ignores case.
+        """
+        base = os.path.normcase(os.path.realpath(self.download_path))
+        real = os.path.normcase(os.path.realpath(song_path))
+        if not real.startswith(base + os.sep):
+            raise PermissionError(f"Path outside song library refused: {song_path}")
+
     def delete(self, song_path: str) -> None:
         """Delete a song from disk, SongList, and DB."""
+        self._require_in_library(song_path)
         logging.info(f"Deleting song: {song_path}")
         companions = self._get_companion_files(song_path)
         with contextlib.suppress(FileNotFoundError):
@@ -296,6 +337,7 @@ class SongManager:
         Raises:
             FileExistsError: `new_name` is already another song's file.
         """
+        self._require_in_library(song_path)
         new_name = sanitize_filename(new_name)
         logging.info(f"Renaming song: '{song_path}' to: {new_name}")
         companions = self._get_companion_files(song_path)
@@ -321,6 +363,13 @@ class SongManager:
         return new_path
 
     def register_download(self, song_path: str) -> None:
-        """Register a newly downloaded song in SongList and DB."""
+        """Register a newly downloaded song in SongList and DB.
+
+        The duration is filled as the row is born -- one probe of a file just
+        written and warm in cache -- so a downloaded song never needs the sweep.
+        """
         self.songs.add_if_valid(song_path)
         self._db.insert_songs([build_song_record(song_path)])
+        duration = get_media_duration(song_path)
+        if duration is not None:
+            self._db.set_duration(song_path, duration)
