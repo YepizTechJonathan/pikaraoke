@@ -1,11 +1,16 @@
 """Tests for the Add New page: it acquires songs and flags ones already held."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
+from flask import Flask
+from flask_babel import Babel
 
+from pikaraoke.lib.singer_manager import SINGER_NAME_MAX_LENGTH
 from pikaraoke.lib.youtube_dl import SearchResult
 from pikaraoke.routes.search import search_bp
+from pikaraoke.routes.search_api import search_api_bp
 from tests.conftest import make_route_app
 
 HELD = SearchResult("Held Song", "https://youtu.be/aaaaaaaaaaa", "aaaaaaaaaaa", "Chan", "3:21")
@@ -15,7 +20,7 @@ MISSING = SearchResult(
 
 # The rendered elements, not the bare class name -- that also appears in the page's CSS.
 # The row carries the queue-or-not intent, so there is no global toggle to read.
-QUEUE_BUTTON = 'class="button is-info search_result_items_download" data-queue="1"'
+QUEUE_BUTTON = 'class="button is-success search_result_items_download" data-queue="1"'
 SAVE_BUTTON = 'class="button search_result_items_download" data-queue=""'
 
 
@@ -124,3 +129,113 @@ class TestLibraryMatches:
         assert "vi/zzzzzzzzzzz/mqdefault.jpg" in rows
         assert "4:05" in rows
         assert "Chan" in rows
+
+
+class TestDownloadRequiresName:
+    """A download must carry a name, the same invariant as the queue add: the
+    song is attributed the moment it is requested."""
+
+    @pytest.fixture
+    def api_client(self):
+        app = Flask(__name__)
+        Babel(app)
+        app.register_blueprint(search_api_bp)
+        return app.test_client()
+
+    def _download(self, client, body):
+        return client.post("/api/download", data=json.dumps(body), content_type="application/json")
+
+    @pytest.mark.parametrize("name", ["", "   ", "\t"])
+    @patch("pikaraoke.routes.search_api.get_karaoke_instance")
+    def test_blank_name_refused(self, mock_get_instance, api_client, name):
+        body = {
+            "song_url": "https://youtu.be/dQw4w9WgXcQ",
+            "song_title": "T",
+            "song_added_by": name,
+        }
+
+        assert self._download(api_client, body).status_code == 422
+        # Validation refuses before the view runs, so no download is queued.
+        mock_get_instance.assert_not_called()
+
+    @patch("pikaraoke.routes.search_api.get_karaoke_instance")
+    def test_absent_name_refused(self, mock_get_instance, api_client):
+        body = {"song_url": "https://youtu.be/dQw4w9WgXcQ", "song_title": "T"}
+
+        assert self._download(api_client, body).status_code == 422
+        mock_get_instance.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            '<img src=x onerror="console.log(document.domain)">',
+            "Alice <script>",
+            "Bob > Carol",
+            "x" * (SINGER_NAME_MAX_LENGTH + 1),
+        ],
+    )
+    @patch("pikaraoke.routes.search_api.get_karaoke_instance")
+    def test_angle_brackets_or_overlong_name_refused(self, mock_get_instance, api_client, bad_name):
+        body = {
+            "song_url": "https://youtu.be/dQw4w9WgXcQ",
+            "song_title": "T",
+            "song_added_by": bad_name,
+        }
+
+        assert self._download(api_client, body).status_code == 422
+        mock_get_instance.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "--batch-file=/etc/hostname",
+            "--config-locations=/etc/passwd",
+            "http://127.0.0.1:8080/internal",
+            "https://evil.com/watch?v=dQw4w9WgXcQ",
+            "https://www.youtube.com/watch?v=short",
+        ],
+    )
+    @patch("pikaraoke.routes.search_api.get_karaoke_instance")
+    def test_non_youtube_or_option_song_url_refused_on_download(
+        self, mock_get_instance, api_client, bad_url
+    ):
+        body = {"song_url": bad_url, "song_title": "T", "song_added_by": "Tester"}
+
+        assert self._download(api_client, body).status_code == 422
+        mock_get_instance.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "--batch-file=/etc/hostname",
+            "http://127.0.0.1:8080/internal",
+            "https://evil.com/watch?v=dQw4w9WgXcQ",
+        ],
+    )
+    @patch("pikaraoke.routes.search_api.get_stream_url")
+    def test_non_youtube_or_option_url_refused_on_preview(
+        self, mock_get_stream_url, api_client, bad_url
+    ):
+        assert api_client.get(f"/api/preview?url={bad_url}").status_code == 422
+        mock_get_stream_url.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "input_url",
+        [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtu.be/dQw4w9WgXcQ?si=abc",
+            "https://www.youtube.com/v/dQw4w9WgXcQ",
+            "dQw4w9WgXcQ",
+        ],
+    )
+    @patch("pikaraoke.routes.search_api.get_karaoke_instance")
+    def test_valid_youtube_url_or_id_canonicalized_on_download(
+        self, mock_get_instance, api_client, input_url
+    ):
+        body = {"song_url": input_url, "song_title": "T", "song_added_by": "Tester"}
+
+        resp = self._download(api_client, body)
+        assert resp.status_code == 200
+        mock_get_instance.return_value.download_manager.queue_download.assert_called_once_with(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", False, "Tester", "T"
+        )

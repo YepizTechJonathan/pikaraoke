@@ -5,10 +5,11 @@ from urllib.parse import unquote
 import flask_babel
 from flask import Response, jsonify
 from flask_smorest import Blueprint
-from marshmallow import Schema, fields
+from marshmallow import Schema, ValidationError, fields, post_load
 
 from pikaraoke.lib.auth import public
 from pikaraoke.lib.current_app import broadcast_event, get_karaoke_instance
+from pikaraoke.lib.singer_manager import SINGER_NAME_MAX_LENGTH, normalize_name
 
 _ = flask_babel.gettext
 
@@ -27,14 +28,42 @@ class ReorderForm(Schema):
 class EnqueueForm(Schema):
     song_to_add = fields.String(required=True, metadata={"description": "Path to the song file"})
     song_added_by = fields.String(
-        load_default="", metadata={"description": "Name of the user adding the song"}
+        required=True,
+        metadata={"description": "Name of the user adding the song"},
     )
+
+    @post_load
+    def clean_name(self, data, **kwargs):
+        # Normalise so the queued name, the play's performer and the singer row
+        # all agree on one form.
+        name = normalize_name(data["song_added_by"])
+        if not name:
+            # MSG: Error when a song is queued without a name
+            raise ValidationError(_("A name is required"), "song_added_by")
+        if len(name) > SINGER_NAME_MAX_LENGTH:
+            # MSG: Error when a queued name is longer than the limit.
+            raise ValidationError(
+                _("Name must be %(max)d characters or fewer", max=SINGER_NAME_MAX_LENGTH),
+                "song_added_by",
+            )
+        if "<" in name or ">" in name:
+            # MSG: Error when a singer name contains disallowed HTML angle brackets
+            raise ValidationError(_("Invalid singer name"), "song_added_by")
+        data["song_added_by"] = name
+        return data
 
 
 class QueueEditQuery(Schema):
     action = fields.String(required=True, metadata={"description": "Queue edit action to perform"})
     song = fields.String(
         metadata={"description": "Path to the song file (required unless action is 'clear')"}
+    )
+
+
+class QueuePitchQuery(Schema):
+    song = fields.String(required=True, metadata={"description": "Path to the song file"})
+    semitones = fields.Integer(
+        required=True, metadata={"description": "Key the song will transcode in when it starts"}
     )
 
 
@@ -100,9 +129,50 @@ def queue_edit(query):
     return jsonify({"success": success})
 
 
-def _do_enqueue(song: str, user: str) -> Response:
+@queue_api_bp.route("/api/queue/pitch", methods=["POST"])
+@queue_api_bp.arguments(QueuePitchQuery, location="query")
+def queue_pitch(query):
+    """Pre-set the key a queued song transcodes in when it starts (admin only).
+
+    The choice is saved against whoever queued the song, so their next add of it
+    opens in this key.
+
+    QueueManager emits now_playing_update itself, which Karaoke bridges to the
+    socket, so this path adds no broadcast_event.
+    """
     k = get_karaoke_instance()
-    rc = k.queue_manager.enqueue(song, user)
+    song = unquote(query["song"])
+    semitones = query["semitones"]
+    # The queue item names the singer, so read it before the write.
+    user = k.queue_manager.get_song_user(song)
+    success = k.queue_manager.set_song_semitones(song, semitones)
+    if success:
+        k.singer_manager.save_key(user, song, semitones)
+    return jsonify({"success": success})
+
+
+def _do_enqueue(song: str, user: str) -> Response | tuple[Response, int]:
+    k = get_karaoke_instance()
+    if song not in k.song_manager.songs:
+        return (
+            jsonify(
+                {
+                    "song": False,
+                    # MSG: Error when trying to queue a song that is not in the library
+                    "success": [False, _("Song is not in the library")],
+                }
+            ),
+            400,
+        )
+    # A merged name is retired; reuse the [ok, message] shape the add-song
+    # handler already shows as a danger toast.
+    survivor = k.singer_manager.merged_into_name(user)
+    if survivor:
+        # MSG: Error when queueing under a name the host merged into another. %(name)s is the surviving name.
+        message = _("This name was merged into %(name)s. Set your name to continue.", name=survivor)
+        return jsonify({"song": user, "success": [False, message]})
+    semitones = k.singer_manager.get_saved_key(user, song)
+    rc = k.queue_manager.enqueue(song, user, semitones=semitones)
     broadcast_event("queue_update")
     song_title = k.song_manager.display_name_from_path(song)
     return jsonify({"song": song_title, "success": rc})

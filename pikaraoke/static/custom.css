@@ -1,35 +1,637 @@
-.custom-combobox {
-  position: relative;
-  display: inline-block;
-  width: 90%;
+/* ===================================
+   THEME
+   PiKaraoke's palette, said in Bulma's own variables. Bulma derives every
+   component's colours from these.
+   =================================== */
+:root {
+  /* Bulma applies the family to body and to every form control. */
+  --bulma-family-primary: "Lato", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+    sans-serif;
+
+  /* The neutral ramp. Every page's content sits in one box, so the box is Bulma's
+     scheme-main: the surface Bulma measures its stripes, hovers, lines and borders
+     from. The steps above it are Bulma's own dark-theme offsets, counted from the
+     box, so moving the box moves all of them. The page around the box is the one
+     surface beyond Bulma's ramp. Bulma keeps text on its own hue and saturation,
+     so both pairs are set. */
+  --bulma-scheme-h: 182;
+  --bulma-scheme-s: 7%;
+  --bulma-text-h: 182deg;
+  --bulma-text-s: 7%;
+  --bulma-scheme-main-l: 22%;
+  --bulma-scheme-main-bis-l: calc(var(--bulma-scheme-main-l) + 2%);
+  --bulma-scheme-main-ter-l: calc(var(--bulma-scheme-main-l) + 4%);
+  --bulma-background-l: calc(var(--bulma-scheme-main-l) + 5%);
+  --bulma-border-weak-l: calc(var(--bulma-scheme-main-l) + 12%);
+  --bulma-border-l: calc(var(--bulma-scheme-main-l) + 15%);
+  --bulma-body-background-color:
+    hsl(var(--bulma-scheme-h), var(--bulma-scheme-s), calc(var(--bulma-scheme-main-l) - 9%));
+  --bulma-text-weak-l: 58%;
+  --bulma-text-l: 87%;
+  --bulma-text-strong-l: 95%;
+
+  --bulma-primary-h: 211deg;
+  --bulma-primary-s: 40%;
+  --bulma-primary-l: 36%;
+  --bulma-link-h: 168deg;
+  --bulma-link-s: 76%;
+  --bulma-link-l: 42%;
+  --bulma-info-h: 204deg;
+  --bulma-info-s: 71%;
+  --bulma-info-l: 53%;
+  /* Add-to-queue's colour on every page: a soft true green, clear of the link teal. */
+  --bulma-success-h: 128deg;
+  --bulma-success-s: 45%;
+  --bulma-success-l: 52%;
+  --bulma-warning-h: 45deg;
+  --bulma-warning-s: 89%;
+  --bulma-warning-l: 50%;
+  --bulma-danger-h: 6deg;
+  --bulma-danger-s: 78%;
+  --bulma-danger-l: 57%;
+
+  /* Bulma picks each accent's ink from a lightness ladder compiled for its own
+     accent, and does not recompute it when the accent changes. Its primary is a
+     luminous turquoise wanting near-black ink; this navy wants white, which is
+     7.2:1 where the baked ink is 2.7:1. The same mismatch runs the other way on
+     the teal, where dark ink replaces white at 2.4:1. */
+  --bulma-primary-invert-l: var(--bulma-primary-100-l);
+  --bulma-link-invert-l: var(--bulma-link-05-l);
+  /* Text in an accent colour is re-lit to stay readable on the page. The navy
+     needs lifting (5.2:1). Links keep the palette teal as it is, so the hover, 5%
+     lighter, lands on the palette's hover teal exactly. */
+  --bulma-primary-on-scheme-l: var(--bulma-primary-60-l);
+  --bulma-link-on-scheme-l: var(--bulma-link-l);
+
+  /* Inset panels - has-background-dark, cards, the now-playing row - sit one of
+     Bulma's 5% steps below the box, on the ramp's hue rather than Bulma's blue. */
+  --bulma-dark-h: var(--bulma-scheme-h);
+  --bulma-dark-s: var(--bulma-scheme-s);
+  --bulma-dark-l: calc(var(--bulma-scheme-main-l) - 5%);
+
+  /* Bulma's dark theme moves a hovered colour 5%, too faint on this ramp to read as a
+     hover; every hover in the app takes its step from these two. */
+  --bulma-hover-color-l-delta: 10%;
+  --bulma-hover-background-l-delta: 10%;
+
+  /* Surfaces are told apart by their fill, not by Bulma's dark-theme glow. */
+  --bulma-shadow: none;
+
+  /* One corner radius for every surface and control. */
+  --bulma-radius-small: var(--bulma-radius);
+  --bulma-radius-medium: var(--bulma-radius);
+  --bulma-radius-large: var(--bulma-radius);
+
+  /* Bulma scopes the list-item hover to .panel; the option lists in the modals are
+     panel-blocks too, and hover the same way. */
+  --bulma-panel-block-hover-background-color: var(--bulma-background);
 }
-.custom-combobox-toggle {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  margin-left: -1px;
-  padding: 0;
+
+/* Plain buttons are dark wells, below the page as on master. Bulma fills them with
+   the surface they sit on and outlines them to compensate; filled, they need no
+   outline, like the coloured buttons. is-outlined sets its own width. Disabled,
+   they keep their fill and Bulma's opacity fades it; Bulma's own disabled fill is
+   scheme-main, the box itself, where a faded button vanishes. */
+.button {
+  --bulma-button-background-l: calc(var(--bulma-scheme-main-l) - 13%);
+  --bulma-button-border-width: 0px;
+  --bulma-button-disabled-background-color:
+    hsl(var(--bulma-scheme-h), var(--bulma-scheme-s), var(--bulma-button-background-l));
 }
-.custom-combobox-input {
-  border-top-right-radius: 0 !important;
-  border-bottom-right-radius: 0 !important;
+
+/* Hovering lights the label; the fill lifts only as far as master's, short of
+   fading into the box. Coloured buttons keep Bulma's hover. */
+.button:hover:not(
+    [disabled],
+    .is-white,
+    .is-black,
+    .is-light,
+    .is-dark,
+    .is-primary,
+    .is-link,
+    .is-info,
+    .is-success,
+    .is-warning,
+    .is-danger,
+    .is-text,
+    .is-ghost
+  ) {
+  --bulma-button-background-l-delta: 5%;
+  color: var(--bulma-link-text-hover);
 }
-#notification {
-  margin-bottom: 0;
+
+/* Cards are inset panels. A card's header is set apart from its body by fill, the
+   page colour, as a modal's is below. */
+.card {
+  --bulma-card-background-color: var(--bulma-dark);
+  --bulma-card-header-background-color: var(--bulma-body-background-color);
+  --bulma-card-radius: var(--bulma-radius);
 }
-#brand {
+
+/* The join card sets the QR code beside its web address on a wide screen. On a
+   phone that squeezes the address into a sliver, so stack them instead - code
+   above, address centred below. Bulma has no responsive flex-direction helper. */
+@media screen and (max-width: 768px) {
+  .join-card {
+    flex-direction: column;
+    text-align: center;
+  }
+  .join-card > div {
+    margin-inline-start: 0;
+    margin-top: 1rem;
+  }
+}
+
+/* Every data-table cell centres on its row, so an icon, a tag or a two-line wrap
+   all sit level against the text. Bulma top-aligns by default; this one rule
+   replaces the per-cell is-vcentered the row generators used to carry. */
+.table td {
+  vertical-align: middle;
+}
+
+/* Rows are told apart by the stripe, so the cell border is off. Bulma's stripe,
+   a step stronger. Any hovered row takes the app's hover step. */
+.table {
+  --bulma-table-cell-border-width: 0;
+  --bulma-table-striped-row-even-background-color: var(--bulma-scheme-main-ter);
+  --bulma-table-row-hover-background-color:
+    hsl(var(--bulma-scheme-h), var(--bulma-scheme-s),
+      calc(var(--bulma-scheme-main-l) + var(--bulma-hover-background-l-delta)));
+  --bulma-table-striped-row-even-hover-background-color: var(--bulma-table-row-hover-background-color);
+}
+
+/* A clickable sort header, keyed on .sortable not the table's class so it is
+   not tied to one table's name. */
+th.sortable {
+  cursor: pointer;
+  white-space: nowrap;
+}
+th.sortable:hover {
+  color: var(--bulma-text-strong);
+}
+/* A bare Phosphor glyph, not a Bulma .icon whose 1.5rem box would float it off
+   the baseline. */
+.sort-arrow {
+  font-size: 0.8em;
+}
+/* width:auto drops the centred .ph box so margin-left alone sets the gap. */
+.sort-arrow i:before {
+  width: auto;
+  margin-left: 0.35em;
+}
+/* Right-aligned sortable headers carry the arrow ahead of the label (the
+   template puts the span first), so the label right-aligns with the cells below
+   and the arrow sits just to its left. The glyph is sub-em, so the gap is small. */
+th.sortable.has-text-right .sort-arrow {
+  margin-right: 0.05em;
+}
+th.sortable.has-text-right .sort-arrow i:before {
   margin-left: 0;
 }
-#menu {
+/* The arrow is rendered in every sortable header, not only the sorted one (see
+   renderSortArrows). The sorted header colours it in; the rest hold the same
+   glyph transparently, purely to reserve its width -- so the sort can move from
+   one column to another without any column changing width and reflowing. */
+th.sortable .sort-arrow {
+  color: transparent;
+}
+th.sortable.is-sorted .sort-arrow {
+  color: inherit;
+}
+
+/* Bulma sets a modal's header apart from its body only by the shadow turned off
+   above; the page colour does it by fill, as the wells do. */
+.modal {
+  --bulma-modal-card-head-background-color: var(--bulma-body-background-color);
+}
+
+/* Every modal card is a short option list. */
+.modal-card {
+  --bulma-modal-card-head-padding: 1rem;
+  --bulma-modal-card-body-padding: 0;
+  width: 90%;
+  max-width: 400px;
+}
+.modal-card-title {
+  max-width: 95%;
+}
+
+/* Bulma rounds the foot but not the body, so a footless modal ends square. */
+.modal-card-body:last-child {
+  border-end-start-radius: var(--bulma-modal-card-foot-radius);
+  border-end-end-radius: var(--bulma-modal-card-foot-radius);
+}
+
+/* A prose or form modal, not the self-padding option list the shared style
+   above zeroes body padding for: its message, fields and buttons take the head's
+   inset, and its foot buttons the gap the foot itself gives none. Opt in with
+   `is-prose` on the modal-card; the option-list modals keep the 0 default. */
+.modal-card.is-prose {
+  --bulma-modal-card-body-padding: 1rem;
+}
+.modal-card.is-prose .modal-card-foot {
+  gap: 0.75rem;
+}
+
+/* Bulma 1.0 defines a link hover colour but applies it to no plain link, only to its
+   own components, which hover their own way. This is the rule bulma-dark.css used
+   to carry, for text links only. */
+a:not(.button, .navbar-item, .navbar-link, .navbar-burger, .panel-block, .delete):hover {
+  color: var(--bulma-link-text-hover);
+}
+
+/* Form fields stay white on the dark page, so the colours Bulma derives for them
+   from the dark scheme - text, placeholder and icon, all near-white - are taken
+   from the field instead. The placeholder is the field's own text at partial
+   alpha, the same pattern Bulma uses for it. */
+.control,
+.input,
+.select,
+.textarea {
+  --bulma-input-background-l: var(--bulma-white-l);
+  --bulma-input-color-l: var(--bulma-dark-l);
+  --bulma-input-placeholder-color:
+    hsla(var(--bulma-input-h), var(--bulma-input-s), var(--bulma-input-color-l), 0.7);
+  --bulma-input-icon-color: var(--bulma-input-placeholder-color);
+  --bulma-input-icon-hover-color: var(--bulma-input-placeholder-color);
+}
+
+/* Firefox applies its own default placeholder opacity on top of the colour. */
+.input::placeholder,
+.textarea::placeholder {
+  opacity: 1;
+}
+
+/* A preference that applies on click is a switch, not a checkbox. Bulma has none,
+   so it is drawn on a bare <input type="checkbox"> -- markup and :checked handlers
+   unchanged -- with the thumb as the input's ::before, green when on. */
+input.switch[type="checkbox"] {
+  appearance: none;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 2.5em;
+  height: 1.4em;
+  margin-right: 0.5em;
+  border-radius: var(--bulma-radius-rounded);
+  background-color: var(--bulma-border);
+  vertical-align: middle;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+input.switch[type="checkbox"]::before {
+  content: "";
+  display: block;
+  width: calc(1.4em - 4px);
+  height: calc(1.4em - 4px);
+  margin: 2px;
+  border-radius: var(--bulma-radius-rounded);
+  background-color: var(--bulma-white);
+  transition: transform 0.2s ease;
+}
+input.switch[type="checkbox"]:checked {
+  background-color: var(--bulma-success);
+}
+input.switch[type="checkbox"]:checked::before {
+  transform: translateX(calc(2.5em - 1.4em));
+}
+input.switch[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--bulma-link);
+  outline-offset: 2px;
+}
+
+/* The heading row baseline-aligns its action so a text action sits on the title's
+   baseline. A glyph action -- the autoplay switch, the bulk-rename icon -- has no
+   such baseline, so it centres on the title and centres its own glyph on its label;
+   the gap replaces the switch's default spacing. */
+.heading-action {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.heading-action input.switch[type="checkbox"] {
   margin-right: 0;
 }
 
-.control-box a {
-  color: #cccccc;
+/* ===================================
+   ICONS (Phosphor)
+   Every glyph is wrapped in Bulma's .icon, which flex-centres the glyph in its
+   box; a vertical-align on .icon (below) then seats that box on the adjacent
+   text -- so there is no bare <i class="ph"> to nudge and no per-glyph nudge.
+   Size is the .icon tier, the glyph sitting a little
+   inside its box so it reads a touch larger than Bulma's default.  Two bespoke
+   exceptions keep their own sizing: .sort-arrow (a sub-em header indicator the
+   1.5rem box is wrong for) and .singer-avatar (a themed slot, soon a photo).
+   =================================== */
+.ph:before {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+}
+/* .icon is inline-flex, so on its own in a line it aligns to the text baseline
+   and a box taller than the text rides high above it -- most visible on the
+   add-song plus in a browse or rankings cell. Centre the box on the text's
+   middle instead. Ignored wherever .icon is a flex item (buttons, navbar,
+   panel-block, .icon-text, the rankings wrapper), so only bare inline icons move. */
+.icon {
+  vertical-align: middle;
+}
+.icon .ph {
+  font-size: 1.25rem;
+}
+.icon.is-small .ph {
+  font-size: 1rem;
+}
+.icon.is-medium .ph {
+  font-size: 1.5rem;
+}
+.icon.is-large .ph {
+  font-size: 2rem;
+}
+/* An icon embedded in sized display text -- the singer marker and the playback
+   controls -- tracks that text's size rather than a fixed tier: the box hugs
+   the glyph and the glyph inherits the surrounding font-size (is-size-3 for the
+   controls, is-size-4 for the now-playing singer). */
+.icon.is-text-size {
+  width: auto;
+  height: auto;
+}
+.icon.is-text-size .ph {
+  font-size: 1em;
 }
 
-.control-box a:hover {
-  color: #74ccb3;
+/* ===================================
+   NAVBAR
+   is-primary paints the bar, its items, the burger menu and the dropdown in the
+   primary navy; these configure the rest.
+   =================================== */
+.navbar {
+  border-radius: var(--bulma-radius);
+}
+
+.navbar.is-primary {
+  /* The burger reads --bulma-navbar-burger-color, which defaults to the link
+     colour; is-primary only sets a variable an overridden rule consumes. */
+  --bulma-navbar-burger-color: var(--bulma-navbar-item-color);
+  /* Lines sit the ramp's border step (+15%) lighter than their surface; the divider's
+     surface is the bar's navy. Bulma's default is darker than the bar. */
+  --bulma-navbar-divider-background-l: calc(var(--bulma-primary-l) + 15%);
+  /* A text control: hover tints the text and holds the background, as every other
+     text control in the app does. */
+  --bulma-navbar-item-hover-background-l-delta: 0%;
+}
+
+/* One hamburger at every width. Bulma shows the brand burger only below 1024px and
+   lays the secondary menu out inline above it; these rules keep the burger and its
+   drop-down panel at all widths, so the menu looks and behaves the same on a phone
+   and a desktop. The panel's chrome (navy background, shadow, padding) is Bulma's
+   own mobile styling, which the desktop breakpoint leaves untouched. */
+.navbar-menu.is-active {
+  position: absolute;
+  right: 0;
+}
+@media screen and (min-width: 1024px) {
+  /* Block, not flex: the brand row then fills the bar's width, so the burger's
+     margin-inline-start:auto carries it to the far right and the panel drops
+     below it - exactly the mobile layout. */
+  .navbar {
+    display: block;
+  }
+  .navbar-burger {
+    display: inline-flex;
+  }
+  .navbar-menu {
+    display: none;
+  }
+  .navbar-menu.is-active {
+    display: block;
+  }
+  .navbar-end {
+    display: block;
+  }
+}
+
+/* White text cannot brighten, so hover takes the interactive teal, as does the
+   current page, which spa-navigation.js marks with is-active - the app's only
+   "you are here". Bulma's selected state cannot do it: it changes the item's hue
+   variables, but the text colour is composed on .navbar and inherited finished. */
+.navbar-item:hover,
+a.navbar-item.is-active {
+  color: var(--bulma-link);
+}
+
+/* Bulma hides the divider below its desktop breakpoint; the burger menu it would
+   separate now exists at all widths, so the divider does too. */
+.navbar-menu .navbar-divider {
+  display: block;
+}
+
+/* In the burger panel Bulma lays each item out as a block, so its .icon and label
+   share a text line where vertical-align leaves the icon slightly high. Flex-align
+   the item's contents to centre the icon on its label, as the desktop bar does. */
+.navbar-menu .navbar-item {
+  display: flex;
+  align-items: center;
+}
+
+/* The burger panel's chrome. Bulma scopes the background, shadow and padding to
+   its touch breakpoint, so forcing burger mode on desktop would leave the panel
+   see-through; re-assert them here at all widths, since the panel is a burger
+   panel everywhere now. The panel hangs below the bar, so only its bottom corners
+   round, and overflow clips the last item's square corners off the rounded panel. */
+.navbar-menu {
+  background-color: var(--bulma-navbar-background-color);
+  box-shadow: 0 0.5em 1em
+    hsla(var(--bulma-scheme-h), var(--bulma-scheme-s), var(--bulma-scheme-invert-l), 0.1);
+  padding: 0.5rem 0;
+  border-end-start-radius: var(--bulma-radius);
+  border-end-end-radius: var(--bulma-radius);
+  overflow: hidden;
+}
+
+/* The person item rides to the right of the bar, just left of the hamburger: its
+   auto-margin takes the free space and the burger tucks in beside it. A long name
+   is truncated so it cannot push the burger off the bar. */
+#current-user {
+  margin-inline-start: auto;
+}
+#current-user ~ .navbar-burger {
+  margin-inline-start: 0;
+}
+#current-user .is-truncated {
+  max-width: 8rem;
+}
+/* One avatar slot for the navbar and the roster, a photo later: one footprint.
+   --avatar-size drives both slot and glyph in one place; position:relative
+   anchors a future lock badge. Its own flex wrapper, not a Bulma .icon, so a
+   disc or photo fills the slot rather than a padded box. vertical-align seats it
+   on the text middle inline and in a table cell; ignored where it is a flex
+   item (navbar). */
+.singer-avatar {
+  --avatar-size: 1.5rem;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  margin-right: 0.125rem;
+  vertical-align: middle;
+}
+.singer-avatar > .ph {
+  font-size: var(--avatar-size);
+}
+/* A retired (merged) singer: a knocked-out face on a muted disc, meant to read
+   as inactive. */
+.singer-avatar.is-retired {
+  border-radius: 50%;
+  background-color: color-mix(in srgb, var(--bulma-text) 12%, transparent);
+}
+.singer-avatar.is-retired > .ph {
+  font-size: calc(var(--avatar-size) * 0.6);
+  color: var(--bulma-grey-light);
+}
+/* A system performer (Randomizer, Pikaraoke): a solid accent disc, not muted,
+   so it reads as the app's own and active. */
+.singer-avatar.is-system {
+  border-radius: 50%;
+  background-color: var(--bulma-link);
+}
+.singer-avatar.is-system > .ph {
+  font-size: calc(var(--avatar-size) * 0.6);
+  color: var(--bulma-link-invert);
+}
+
+/* The box and the first navbar icon share one left inset, so the bar icons line
+   up with the body text beneath them. A single gutter drives both: the box's
+   padding and the first brand item's left padding. A phone tightens the gutter
+   for more room; the icons follow because they read the same variable. */
+.container {
+  --app-gutter: 1rem;
+}
+@media screen and (max-width: 768px) {
+  .container {
+    --app-gutter: 0.75rem;
+  }
+}
+.box {
+  --bulma-box-padding: var(--app-gutter);
+}
+/* The first item now sits flush in the navbar's rounded corner, so its active
+   and hover background (Bulma paints it opaque) would square that corner off.
+   Rounding the item's leading edge lets the fill follow the navbar instead. */
+.navbar-brand .navbar-item:first-child {
+  padding-left: var(--app-gutter);
+  border-start-start-radius: var(--bulma-radius);
+  border-end-start-radius: var(--bulma-radius);
+}
+
+/* Bar icons hug their glyph (Bulma gives .icon a fixed 1.5rem box) so the first
+   one's glyph meets the gutter and each label sits close to its icon, not across
+   the leftover box width. The glyph's own left margin goes too. The singer pill
+   keeps the centred box: it pairs its mic with a name, and shrinking the box
+   would pull the mic left. */
+.navbar-brand .navbar-item:not(#current-user) > .icon {
+  width: auto;
+}
+.navbar-brand .navbar-item:not(#current-user) > .icon::before {
+  margin-left: 0;
+}
+
+/* Reserve a stable height so starting, changing or ending a song does not resize
+   the slot and shove the page up and down. Sized to the playing state; the shorter
+   ready-to-start and idle states leave space below rather than jump. */
+#focus-slot {
+  min-height: 15rem;
+}
+
+/* The title, singer and Next Song span the full column so a long title does not
+   wrap early on desktop; only the player block (bar and controls) stays compact
+   rather than stretching the transport across the width. */
+#np-progress,
+#focus-playing > .box,
+#focus-pending > .box,
+#home-signpost {
+  max-width: 500px;
+}
+
+/* Transport and other icon links in the focus slot read as controls, not teal
+   hyperlinks; Start/Skip and the signpost are .button and keep their own colour. */
+#focus-slot a:not(.button) {
+  color: var(--bulma-text);
+}
+#focus-slot a:not(.button):hover {
+  color: var(--bulma-text-strong);
+}
+
+/* Dimmed and non-interactive while the transport waits out the autoplay gap, so
+   the box holds its height without the controls flashing in and out. */
+#focus-playing.is-inert {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* The newcomer's playback-state line reads as a heading, not muted body text, so
+   it matches the state heading a joined device sees. */
+#newcomer-state {
+  color: var(--bulma-text-strong);
+}
+
+/* The playing transport (icon row) and the ready-to-start Start/Skip (buttons) are
+   naturally different heights; matching them keeps the control box from jumping
+   when a song swaps from one state to the other. */
+.focus-transport,
+.focus-pending-actions {
+  min-height: 2.5rem;
+  align-items: center;
+}
+/* Keep Bulma's horizontal gap between Start and Skip but drop the per-button
+   bottom margin, which otherwise leaves dead space beside the toggle. */
+.focus-pending-actions .button {
+  margin-bottom: 0;
+}
+
+/* Audio-settings toggle: white at rest like the transport, teal on hover (as the
+   app's other icon links) and teal while its panel is open. */
+.js-show-advanced {
+  cursor: pointer;
+}
+#focus-slot a.js-show-advanced:hover {
+  color: var(--bulma-link-text-hover);
+}
+#focus-slot .js-show-advanced[aria-expanded="true"] {
+  color: var(--bulma-link);
+}
+/* Tighten the opened panel: Bulma's default hr margin leaves too much dead
+   space under the controls and around the rule between them. */
+.js-advanced-panel hr {
+  margin: 0.6rem 0;
+}
+
+/* Now-playing progress bar. Shared markup/classes with the splash and queue bars
+   (their plan owns those surfaces); heights are set per surface. scaleX rather
+   than width so the Pi's own browser composites the tick instead of laying it out. */
+.np-bar {
+  height: 6px;
+  border-radius: 999px;
+  background-color: var(--bulma-scheme-main-ter);
+  overflow: hidden;
+}
+.np-bar-fill {
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left;
+  background-color: var(--bulma-link);
+  transition: transform 1s linear;
+}
+.np-bar-fill.is-snapping {
+  transition: none;
+}
+.np-times {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
 }
 
 .pagination {
@@ -42,24 +644,8 @@
   margin-left: 0;
   font-size: 12px;
 }
-.pagination-list {
-  list-style: none !important;
-  margin-top: 0px !important;
-  margin-left: 0px !important;
-  margin-bottom: 0px !important;
-}
-.pagination-list li {
-  margin-top: 0px !important;
-}
-.pagination-previous,
-.pagination-next {
-  margin-top: 0px !important;
-  margin-bottom: 0px !important;
-}
 .pagination-page-info b {
-  color: white;
-  background-color: transparent;
-  font-size: 100%;
+  color: var(--bulma-white);
 }
 
 input {
@@ -67,49 +653,35 @@ input {
   font-size: 16px !important;
 }
 
-/* Sections step down from the page heading rather than matching it: Bulma's
-   own scale starts an h2 at 1.75em. Bold, not Bulma's 800, which the theme
-   loads no face for. */
-.content h2 {
+/* Section headings: Bulma's document scale, stepped down from the page title
+   and bold (Lato has no 800 face). */
+.box :is(h2, h3, h4, h5, h6) {
+  color: var(--bulma-text-strong);
+  font-weight: var(--bulma-weight-bold);
+  line-height: 1.125;
+}
+.box h2 {
   font-size: 1.5em;
+  margin-bottom: 0.5714em;
 }
-.content h3 {
+.box h2:not(:first-child) {
+  margin-top: 1.1428em;
+}
+.box h3 {
   font-size: 1.25em;
+  margin-bottom: 0.6666em;
 }
-.content h4 {
+.box h3:not(:first-child) {
+  margin-top: 1.3333em;
+}
+.box h4 {
   font-size: 1.125em;
+  margin-bottom: 0.8em;
 }
-.content h5,
-.content h6 {
+.box h5,
+.box h6 {
   font-size: 1em;
-}
-.content h2,
-.content h3,
-.content h4,
-.content h5,
-.content h6 {
-  font-weight: 700;
-}
-
-/* The heading row: the page title, and optionally one action held against the
-   right edge. Baseline rather than centre, so that action sits on the title's
-   own text line instead of floating halfway up it. */
-.page-header {
-  /* What .title:not(:last-child) used to give the header it replaced. */
-  margin-bottom: var(--bulma-block-spacing);
-}
-.page-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 1rem;
-}
-/* Matched on .title, not h1: Bulma spaces a .title from what follows it, which
-   inside a row is height rather than space, and its selector outranks an h1
-   one. Regular weight because the sections below carry the emphasis. */
-.page-heading .title {
-  font-weight: 400;
-  margin-bottom: 0;
+  margin-bottom: 0.8888em;
 }
 
 table {
@@ -117,9 +689,29 @@ table {
   width: 100%;
 }
 
+/* A fixed layout holds each column to its share, so a word longer than the
+   column breaks rather than running into the next one. */
+td {
+  overflow-wrap: break-word;
+}
+
 .break-word {
   overflow-wrap: break-word; /* Renamed property in CSS3 draft spec */
   width: 100%;
+}
+
+/* Row-action cells -- the song list's queue/favourite/options glyphs and the
+   options ellipsis on the rankings and history lists -- sit flush as a tight
+   cluster, not in wide default-padded columns. */
+.action-cell {
+  padding-inline: 0.2rem;
+}
+
+/* Bulma has no truncation helper. */
+.is-truncated {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Admin-only field naming who is about to sing. */
@@ -128,117 +720,54 @@ table {
   margin-bottom: 10px;
 }
 
-/* A timestamp cell holds either a time or a date, never both (see whenLabel),
-   so it is short enough to keep whole. Only "31 Jul 2025" is long enough to
-   want a second line, and it has spaces to break at. */
-.when {
-  overflow-wrap: break-word;
-}
-
-/* Every paged table on the site (session list, play log, browse) carries the
-   same controls underneath: a prev/next pair and a "1-50 of 300" summary. */
-.pager-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 10px;
-}
-
-/* The row above a table holding what narrows it: which subset is on screen on
-   the left, the controls that change it on the right. Wraps rather than
-   squeezing, so a long performer name and a checkbox take a line each on a
-   phone. */
-.table-toggle-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  margin-bottom: 8px;
-}
-
-/* Held to the right edge whether or not a filter chip shares the row, so the
-   checkbox is in the same place on every page that has one. Set apart rather
-   than emphasised: these hide bookkeeping rows rather than filter the list the
-   reader came for. */
-.table-toggle {
-  margin-left: auto;
-  color: #a7a7a7;
-  /* A box and its label, centred on each other. Left inline the box sits on the
-     text baseline, which puts it a couple of pixels low against type this
-     small. The gap replaces the whitespace between them, which a flex
-     container would otherwise collapse away. */
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-/* The session list and the play log. Each declares its column widths in a
-   colgroup and keeps the global fixed layout, so the name columns hold their
-   share instead of being squeezed to one word per line by whichever cell
-   happens to hold the longest song title. Only the unsized column absorbs the
-   slack. */
-.history-table td {
-  word-wrap: break-word;
-}
-
 @media screen and (max-width: 600px) {
+  /* Every data table tightens its side padding for column room on a phone; the
+     dense report tables also shrink their type. Each owns its column widths. */
+  .table {
+    --bulma-table-cell-padding: 0.5em 4px;
+  }
+  .history-table,
+  .rankings-table,
+  .songs-table {
+    font-size: 0.9rem;
+  }
   /* Headers set smaller than the rows under them. They are single words that
      cannot wrap, so on a phone they, not the data, are what decides how narrow
      a column may be -- and they are read once rather than scanned down the
      page, which makes them the right thing to shrink. */
-  .history-table th {
+  .history-table th,
+  .rankings-table th {
     font-size: 0.75rem;
   }
 }
 
-/* Which session a page reports on. Its own row on both pages that carry it: a
-   long session name sharing a line with a control wraps badly on a phone. */
-.session-filter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-
-/* Bulma top-aligns every table cell (`table td,table th{vertical-align:top}`,
-   unscoped). Text is fine with that -- it sits half a leading below the cell's
-   top edge -- but a cell holding one glyph has no baseline to sit on, so it
-   pins flush to the top and reads as floating above the words beside it.
-   Cells whose whole content is an icon centre against the row instead. */
-.history-table td.options-cell,
-.history-table td.status-cell {
-  vertical-align: middle;
-}
-
-/* The cog opening a row's actions. Fontello gives every glyph side margins that
-   push it off the right edge the other cells sit flush against. */
+/* The cog opening a row's actions. The cog is an .icon.is-medium like any other
+   icon, so only the anchor's pointer cursor is set here. */
 .row-options-btn {
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  line-height: 1;
 }
 
-.row-options-btn .icon-cog:before {
-  margin-left: 0;
-  margin-right: 0;
+/* The row-options trigger is deliberately dim until pointed at, so a column of
+   them does not compete with the rows. !important because it carries
+   has-text-grey-light, and Bulma's colour helpers are themselves !important. */
+.row-options-btn:hover,
+.song-options-trigger:hover {
+  color: var(--bulma-text-strong) !important;
 }
 
-/* The cog is deliberately dim until pointed at, so a column of them does not
-   compete with the rows. !important because it carries has-text-grey-light,
-   and Bulma's colour helpers are themselves !important. */
-.row-options-btn:hover {
-  color: var(--dark-link) !important;
-}
-
-body.hide-cursor * {
-  cursor: none !important;
+/* The add-to-queue plus brightens as a text link does, by Bulma's hover step on its
+   own colour. !important for the same reason as the cog. */
+.add-song-link.has-text-success:hover {
+  color: hsl(
+    var(--bulma-success-h),
+    var(--bulma-success-s),
+    calc(var(--bulma-success-l) + var(--bulma-hover-color-l-delta))
+  ) !important;
 }
 
 /* Drag and drop highlight */
 .drag-chosen {
-  background-color: #3273dc !important;
+  background-color: var(--bulma-info) !important;
   opacity: 0.9;
 }
 
@@ -248,7 +777,7 @@ body.hide-cursor * {
 }
 
 @keyframes highlight-fade {
-  0% { background-color: #3273dc; }
+  0% { background-color: var(--bulma-info); }
   100% { background-color: transparent; }
 }
 
@@ -260,67 +789,12 @@ body.hide-cursor * {
   flex-shrink: 0;
 }
 
-/* Suggestion results on edit page */
-.suggested_item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--dark-text-light);
-  border-radius: 4px;
-  padding: 0.5em 0.75em;
-  margin-bottom: 2px;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-.suggest-text {
-  flex: 1;
-  min-width: 0;
-}
-.suggest-meta {
-  color: var(--dark-text-muted);
-}
-.suggest-score {
-  flex-shrink: 0;
-  margin-left: 1em;
-  color: var(--dark-text-muted);
-  font-size: 0.8rem;
-}
-
-/* The two Bulma stylesheets disagree about how dark an input is: bulma-dark.css
-   gives .input a white background, while Bulma's own dark-theme variables still
-   supply near-white values for the placeholder (0.3 alpha of a 93%-lightness
-   text colour) and for the left icon. Both were being painted white on white.
-   Set explicit greys rather than adjusting the variables, since the theme chain
-   cannot be trusted to know the background here. */
-.input::placeholder,
-.textarea::placeholder {
-  /* ~4.9:1 on white, and clearly dimmer than the near-black text entered above it */
-  color: #6a7273;
-  /* Firefox applies its own default placeholder opacity on top of the colour */
-  opacity: 1;
-}
-
-.control.has-icons-left .icon,
-.control.has-icons-right .icon {
-  color: #6a7273;
-}
-
-.pager-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  margin-top: 10px;
-}
-
 /* A div, not <progress>, so the fill can transition; the duration matches the poll. */
 .dl-bar {
-  /* The card is .has-background-dark, which Bulma resolves to #2c303a - and
-     --dark-bg-tertiary sits at 1.17:1 against that, so the empty track was invisible
-     until the fill covered it. This blends it toward --dark-border to clear the card
-     without leaving the theme's hue line. */
-  background-color: #454f50;
-  border-radius: 999px;
+  /* A lighter grey on the card's has-background-dark, so the empty track shows
+     before the fill covers it. */
+  background-color: var(--bulma-grey-dark);
+  border-radius: var(--bulma-radius-rounded);
   height: 8px;
   overflow: hidden;
   position: relative;
@@ -328,7 +802,7 @@ body.hide-cursor * {
 }
 
 .dl-bar-fill {
-  background-color: var(--dark-link);
+  background-color: var(--bulma-link);
   border-radius: inherit;
   height: 100%;
   position: relative;
@@ -350,12 +824,12 @@ body.hide-cursor * {
 
 /* Grey, not the accent: a coloured sweep on the empty track would read as real fill. */
 .dl-bar.is-waiting::after {
-  background: linear-gradient(90deg, transparent, var(--dark-border-light), transparent);
+  background: linear-gradient(90deg, transparent, var(--bulma-text-weak), transparent);
   opacity: 0.35;
 }
 
 .dl-bar-fill.is-waiting::after {
-  background: linear-gradient(90deg, transparent, #ffffff, transparent);
+  background: linear-gradient(90deg, transparent, var(--bulma-white), transparent);
   opacity: 0.28;
 }
 
@@ -365,6 +839,11 @@ body.hide-cursor * {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  input.switch[type="checkbox"],
+  input.switch[type="checkbox"]::before {
+    transition: none;
+  }
+
   .dl-bar-fill {
     transition: none;
   }
@@ -377,9 +856,9 @@ body.hide-cursor * {
 }
 
 /* Wraps, unlike the .level.is-mobile it replaces: the phase and the three figures
-   need more room than a phone gives them. The auto margin is on the phase so the
-   figures stay grouped at the right, and so the rate stays right-aligned when it
-   drops to a second line. */
+   need more room than a phone gives them. The auto margin is on the span wrapping
+   the phase so the figures stay grouped at the right, and so the rate stays
+   right-aligned when it drops to a second line. */
 .dl-meta {
   align-items: baseline;
   display: flex;
@@ -390,21 +869,10 @@ body.hide-cursor * {
   min-height: 17px;
 }
 
-.dl-phase-group {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  margin-right: auto;
-}
-
-.dl-phase {
-  color: var(--dark-text-light);
-}
-
 /* Tabular figures and a floor on the width: without both, the percentage and the
    speed change width on every 500 ms poll and the whole row twitches. */
 .dl-percent {
-  color: var(--dark-text-secondary);
+  color: var(--bulma-text-strong);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   min-width: 3.2em;
@@ -412,8 +880,19 @@ body.hide-cursor * {
 }
 
 .dl-meta-rate {
-  color: var(--dark-text-muted);
+  color: var(--bulma-grey-light);
   display: flex;
   font-variant-numeric: tabular-nums;
   gap: 12px;
+}
+
+/* ===================================
+   HELPERS
+   =================================== */
+
+/* Re-assert .is-hidden after Bulma so it wins the !important tie against the
+   display helpers (.is-flex, .is-block), which Bulma prints later; without this
+   an is-hidden + is-flex element never hides. Load-bearing, keep. */
+.is-hidden {
+  display: none !important;
 }

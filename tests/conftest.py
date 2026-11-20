@@ -2,6 +2,7 @@
 
 import threading
 from pathlib import Path, PurePath
+from unittest.mock import MagicMock
 from urllib.parse import quote
 
 import pytest
@@ -10,6 +11,7 @@ from flask_babel import Babel
 
 from pikaraoke.lib.auth import document_auth, install_auth_gate, public
 from pikaraoke.lib.events import EventSystem
+from pikaraoke.lib.karaoke_database import KaraokeDatabase
 from pikaraoke.lib.preference_manager import PreferenceManager
 from pikaraoke.lib.queue_manager import QueueManager
 from pikaraoke.lib.song_manager import SongManager
@@ -26,11 +28,15 @@ _BASE_TEMPLATE_ENDPOINTS = [
     ("/browse", "files.browse"),
     ("/search", "search.search"),
     ("/info", "info.info"),
+    ("/settings", "settings.settings"),
     ("/rankings", "sessions.rankings"),
     ("/history", "sessions.history"),
     ("/sessions", "sessions.sessions"),
+    ("/singers", "singers.singers"),
     ("/api/sessions/singers", "sessions_api.get_singers"),
     ("/api/enqueue", "queue_api.enqueue_form"),
+    ("/api/singer/favourite", "singers_api.set_favourite"),
+    ("/api/singer/rename", "singers_api.rename_singer"),
 ]
 
 
@@ -74,7 +80,12 @@ def make_route_app(blueprint, linked_endpoints, admin: bool = True):
 
     @app.context_processor
     def inject_path_config():
-        return {"base_path": "", "socketio_path": "/socket.io", "cookie_path": "/"}
+        return {
+            "base_path": "",
+            "socketio_path": "/socket.io",
+            "cookie_path": "/",
+            "singer_name_max_length": 30,
+        }
 
     # app.py binds these at import for the same reason: base.html calls them on
     # every render, so a page rendered without them fails on an undefined name.
@@ -84,6 +95,9 @@ def make_route_app(blueprint, linked_endpoints, admin: bool = True):
         is_admin=lambda: admin,
         has_active_session=lambda: False,
         active_session_name=lambda: "",
+        # The song lists draw a star per row from this; empty by default, so a
+        # test that does not set up favourites renders every row unstarred.
+        favourite_paths=lambda: set(),
     )
     install_auth_gate(app)
     return app
@@ -220,6 +234,19 @@ class MockPlayHistory:
         # {lower-case name: songs sung tonight}, for staging a session already
         # under way.
         self.turns_taken = turns_taken or {}
+        # The performer of the play on screen, which a rename has to move.
+        self._current_performer = None
+        # The singer id passed to the last clear_singer_plays, for delete tests.
+        self.cleared_singer_plays = None
+
+    def rename_current_performer(self, old_name, new_name):
+        if self._current_performer and self._current_performer.lower() == old_name.lower():
+            self._current_performer = new_name
+
+    def clear_singer_plays(self, singer_id):
+        # The real manager wipes the plays and forgets any in-flight row; the
+        # delete orchestration only needs to see it was called here.
+        self.cleared_singer_plays = singer_id
 
     def get_current_session(self) -> dict | None:
         return self.session
@@ -257,6 +284,7 @@ class MockKaraoke:
     def __init__(self, tmp_path):
         self.song_manager = MockSongManager()
         self.sound_manager = MockSoundManager()
+        self.db = KaraokeDatabase(str(tmp_path / "test.db"))
         self._keep_awake = MockKeepAwake()
         self._socketio = None
         self.events = EventSystem()
@@ -266,9 +294,11 @@ class MockKaraoke:
         self.playback_controller = MockPlaybackController()
         self._playback_lock = threading.Lock()
         self.play_history = MockPlayHistory()
+        # A stand-in for the singers table; rename tests configure its find().
+        self.singer_manager = MagicMock()
+        self.singer_manager.find.return_value = None
         self.volume = 0.85
         self.running = True
-        self.now_playing_notification = None
 
         # Set preferences that differ from defaults
         self.preferences.set("enable_fair_queue", True)
@@ -310,7 +340,11 @@ class MockKaraoke:
     get_now_playing = Karaoke.get_now_playing
     is_song_in_use = Karaoke.is_song_in_use
     rename_song = Karaoke.rename_song
+    rename_singer = Karaoke.rename_singer
+    merge_singers = Karaoke.merge_singers
+    delete_singer = Karaoke.delete_singer
     reset_now_playing = Karaoke.reset_now_playing
+    _recue_current = Karaoke._recue_current
     transpose_current = Karaoke.transpose_current
     send_notification = Karaoke.send_notification
     log_and_send = Karaoke.log_and_send
@@ -318,9 +352,9 @@ class MockKaraoke:
     volume_change = Karaoke.volume_change
     vol_up = Karaoke.vol_up
     vol_down = Karaoke.vol_down
+    skip = Karaoke.skip
     restart = Karaoke.restart
     stop = Karaoke.stop
-    reset_now_playing_notification = Karaoke.reset_now_playing_notification
 
 
 class MockSongList:

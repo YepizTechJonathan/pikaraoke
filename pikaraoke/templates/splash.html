@@ -7,7 +7,6 @@
   rel="stylesheet"
   href="{{  url_for('static', filename='score.css') }}"
 />
-<script src="{{ url_for('static', filename='js/subtitles-octopus.js') }}"></script>
 <script>
   // Use this config object to pass data from the jinja2 template to the splash.js code
   const PikaraokeConfig = {
@@ -31,7 +30,6 @@
 <script src="{{ url_for('static', filename='js/splash.js') }}"></script>
 {% endblock %} {% block body %}
 <div id="top-container" class="overlay">
-<i class="icon icon-mic-1 is-invisible" style="position: absolute" title="Current singer"></i>
   <div
     id="now-playing"
     class="has-text-warning stroke is-size-4 has-text-right"
@@ -43,13 +41,13 @@
       style="margin-bottom: 5px"
     ></p>
     <div class="has-text-success">
-		</span><i class="icon icon-mic-1" title="Current singer"></i>
+      <span class="icon is-text-size mr-1"><i class="ph ph-microphone-stage" title="Current singer"></i></span>
       <span id="now-playing-singer"></span>
-		<br />
-		<span class="timestamp is-size-6">
+      <br />
+      <span class="timestamp is-size-6">
         <span id="current">00:00</span>
-		  <span id="duration">/00:00</span>
-		</span>
+        <span id="duration">/00:00</span>
+      </span>
     </div>
   </div>
 </div>
@@ -101,7 +99,7 @@
       <b class="has-text-white"
         >{# MSG: Label for the next singer in the queue. #}
         {% trans %}Next singer:{% endtrans %} </b
-      >&nbsp;<i class="icon icon-mic-1" title="Next singer"></i
+      >&nbsp;<span class="icon is-text-size mr-1"><i class="ph ph-microphone-stage" title="Next singer"></i></span
       ><span id="up-next-singer"></span>
     </div>
   </div>
@@ -177,11 +175,7 @@
    </div>
 
 
-<div
-  id="splash-notification"
-  class="notification overlay"
-  style="display: none; border: 2px solid black;"
-></div>
+<div id="splash-notification"></div>
 
 <div class="fw-fh-container">
   <div id="screensaver" style="visibility: hidden; --pikaraoke-logo-url: url('{{ url_for("images.logo") }}');">
@@ -213,11 +207,22 @@
 <script src="{{  url_for('static', filename='score.js') }}"></script>
 
 <style>
+  /* The TV screen keeps master's colours: Bulma's own green and amber, on pure black.
+     The theme retunes these for the phone pages. */
+  :root {
+    --bulma-success-h: 153deg;
+    --bulma-success-s: 53%;
+    --bulma-success-l: 53%;
+    --bulma-warning-h: 42deg;
+    --bulma-warning-s: 100%;
+    --bulma-warning-l: 53%;
+    --bulma-black-l: 0%;
+  }
   html {
     overflow-y: hidden;
   }
   body {
-    background-color: black;
+    background-color: var(--bulma-black);
   }
   #top-container,
   #ap-container,
@@ -259,7 +264,7 @@
     top: 0;
     width: 100vw;
     height: 100vh;
-    background-color: black;
+    background-color: var(--bulma-black);
     display: flex;
     align-items: center;
   }
@@ -272,9 +277,6 @@
     height: 100%;
     width: 100%;
     object-fit: contain;
-  }
-  body {
-    background-color: black;
   }
   .fw-fh-container {
     height: 100vh;
@@ -300,7 +302,7 @@
   /* Reads as the event title under the logo, so it carries no label. */
   #session-name {
     margin-top: 18px;
-    color: white;
+    color: var(--bulma-white);
     font-size: 2rem;
     font-weight: 300;
     letter-spacing: 0.18em;
@@ -366,13 +368,23 @@
   .timestamp {
     font-family: monospace;
   }
+  /* A toast stack anchored top-left over the video. */
   #splash-notification {
     position: absolute;
     top: 15px;
     left: 50px;
     z-index: 6;
-    padding: 5px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
     max-width: 450px;
+  }
+  /* Compact padding for a buttonless TV toast; bordered for legibility over
+     video; no pointer so a toast never blocks the menu overlay. */
+  #splash-notification .notification {
+    --bulma-notification-padding: 0.4em 0.75em;
+    border: 2px solid black;
+    pointer-events: none;
   }
 </style>
 

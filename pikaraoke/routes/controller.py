@@ -10,10 +10,12 @@ controller_bp = Blueprint("controller", __name__)
 
 @controller_bp.route("/api/skip", methods=["POST"])
 def skip():
-    """Skip the currently playing song."""
+    """Skip the playing song, or drop the song cued to start when autoplay is off."""
     k = get_karaoke_instance()
-    broadcast_event("skip", "user command")
-    k.playback_controller.skip()
+    # Fade the splash video only when one is playing; a cued song has no player to stop.
+    if k.playback_controller.is_playing:
+        broadcast_event("skip", "user command")
+    k.skip()
     return jsonify({"success": True})
 
 
@@ -29,6 +31,18 @@ def pause():
     return jsonify({"success": True})
 
 
+@controller_bp.route("/api/play", methods=["POST"])
+def play():
+    """Start the song waiting on the splash when autoplay is off.
+
+    No socket broadcast: the run loop pops the song and the now_playing update
+    carries the player into playback.
+    """
+    k = get_karaoke_instance()
+    k.playback_controller.request_start()
+    return jsonify({"success": True})
+
+
 @controller_bp.route("/api/transpose/<semitones>", methods=["POST"])
 def transpose(semitones):
     """Transpose (pitch shift) the current song."""
@@ -40,9 +54,13 @@ def transpose(semitones):
 
 @controller_bp.route("/api/restart", methods=["POST"])
 def restart():
-    """Restart the current song from the beginning."""
+    """Restart the current song, or re-cue it to wait when autoplay is off."""
     k = get_karaoke_instance()
-    broadcast_event("restart")
+    # Autoplay off re-cues to the waiting state (a skip-like stop); on replays in place.
+    if k.preferences.get_or_default("autoplay"):
+        broadcast_event("restart")
+    else:
+        broadcast_event("skip", "restart")
     k.restart()
     return jsonify({"success": True})
 

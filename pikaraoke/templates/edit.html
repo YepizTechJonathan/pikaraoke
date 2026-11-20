@@ -23,25 +23,28 @@
       $.getJSON(window.pikaraokeConfig.basePath + '/api/metadata/suggest-names', { filename: filename, limit: 5, country: country }, function (data) {
         var $container = $("#suggest_results").empty();
         if (data.suggestions && data.suggestions.length > 0) {
+          var $rows = $('<tbody>');
           $.each(data.suggestions, function (i, item) {
             var display = item.display || (item.title + " - " + item.artist);
-            var $text = $('<span class="suggest-text">').text(display);
+            var $text = $('<span>').text(display);
             if (item.year || item.genre) {
               var parts = [];
               if (item.year) parts.push(item.year);
               if (item.genre) parts.push(item.genre);
-              $text.append($('<span class="suggest-meta">').text(" (" + parts.join(", ") + ")"));
+              $text.append($('<span class="has-text-grey-light">').text(" (" + parts.join(", ") + ")"));
             }
             // Percent, because the score is anchored rather than ranked: 100 means
             // "already correct", not "best of these five". The reason explains a
             // number below that, which the number alone can only assert.
-            var $score = $('<span class="suggest-score">');
+            var $score = $('<span class="has-text-grey-light is-size-7 ml-3">');
             if (item.score != null) {
               $score.text(item.score + '%');
               if (item.reason) $score.attr('title', item.reason);
             }
-            $('<a class="suggested_item has-background-grey-dark">').data('name', display).append($text).append($score).appendTo($container);
+            var $cell = $('<div class="is-flex is-justify-content-space-between is-align-items-center">').append($text, $score);
+            $('<tr class="suggested_item is-clickable">').data('name', display).append($('<td>').append($cell)).appendTo($rows);
           });
+          $('<table class="table is-striped is-hoverable is-narrow mb-0">').append($rows).appendTo($container);
           // {# MSG: Help text explaining that clicking a suggestion copies it to the filename input. #}
           $container.append('<p class="is-size-7 has-text-grey-light mt-2">{{ _("Click a suggestion to use it as the new filename.") | forceescape }}</p>');
         } else {
@@ -128,20 +131,20 @@
     </div>
     <div class="buttons are-small mb-4">
       {# MSG: Label on button which applies automatic formatting to tidy the filename. #}
-      <button type="button" class="button is-rounded is-link" id="auto-format">
-        <span class="icon"><i class="icon-pencil"></i></span>
+      <button type="button" class="button is-link" id="auto-format">
+        <span class="icon"><i class="ph ph-pencil-simple"></i></span>
         <span>{% trans %}Auto Format{% endtrans %}</span>
       </button>
       {# MSG: Label on button which swaps the artist and title around the dash separator. #}
-      <button type="button" class="button is-rounded is-link" id="swap-order">
-        <span class="icon"><i class="icon-exchange"></i></span>
+      <button type="button" class="button is-link" id="swap-order">
+        <span class="icon"><i class="ph ph-swap"></i></span>
         <span>{% trans %}Swap Artist/Title{% endtrans %}</span>
       </button>
       <div class="field has-addons mb-0">
         <div class="control">
           {# MSG: Label on button which searches for track name suggestions from iTunes. #}
           <button type="button" class="button is-small is-info" id="suggest-title">
-            <span class="icon"><i class="icon-search-1"></i></span>
+            <span class="icon"><i class="ph ph-magnifying-glass"></i></span>
             <span>{% trans %}Suggest from iTunes{% endtrans %}</span>
           </button>
         </div>
@@ -165,19 +168,22 @@
         </button>
       </div>
       <div class="control">
-        <a class="button is-light" href="{{ referrer }}">
+        <a class="button" href="{{ referrer }}">
           {%- trans %}Cancel{% endtrans -%}
         </a>
       </div>
     </div>
   </form>
   <div class="has-text-right mt-4">
-    <a class="confirm-delete-file has-text-danger"
-      href="{{url_for('files.delete_file')}}?song={{url_escape(song)}}&referrer={{url_escape(referrer)}}"><i class="icon icon-trash-empty"></i>
+    <a class="icon-text has-text-danger confirm-delete-file"
+      href="{{url_for('files.delete_file')}}?song={{url_escape(song)}}&referrer={{url_escape(referrer)}}">
+      <span class="icon"><i class="ph ph-trash"></i></span>
       {# MSG: Label on button which deletes the current song. #}
+      <span>
       {%- trans -%}
         Delete this song
       {%- endtrans -%}
+      </span>
     </a>
   </div>
 </div>

@@ -133,6 +133,23 @@ class TestGetNowPlaying:
         assert result["up_next"] == "Next Song"
         assert result["next_user"] == "NextUser"
 
+    def test_get_now_playing_carries_cued_song_duration(self, mock_karaoke):
+        """The focus bar needs the waiting song's stored length before it starts."""
+        from pikaraoke.lib.library_scanner import build_song_record
+
+        path = "/songs/Next Song---dQw4w9WgXcQ.mp4"
+        mock_karaoke.db.insert_songs([build_song_record(path)])
+        mock_karaoke.db.set_duration(path, 183)
+        mock_karaoke.queue_manager.enqueue(path, "NextUser")
+
+        assert mock_karaoke.get_now_playing()["up_next_duration"] == 183
+
+    def test_get_now_playing_cued_duration_is_none_when_unfilled(self, mock_karaoke):
+        """A never-probed song leaves the bar an empty track, not an error."""
+        mock_karaoke.queue_manager.enqueue("/songs/Next Song---dQw4w9WgXcQ.mp4", "NextUser")
+
+        assert mock_karaoke.get_now_playing()["up_next_duration"] is None
+
 
 class TestResetNowPlaying:
     """Tests for the reset_now_playing method."""
@@ -316,6 +333,77 @@ class TestRestart:
 
         assert result is False
 
+    def test_restart_recues_to_wait_when_autoplay_off(self, mock_karaoke_with_songs):
+        """Autoplay off: restart returns the song to the head, keeping its key."""
+        k = mock_karaoke_with_songs
+        k.preferences.set("autoplay", "False")
+        path = "/songs/Artist - Song One---abc123.mp4"
+        pc = k.playback_controller
+        pc.now_playing = "Artist - Song One"
+        pc.now_playing_filename = path
+        pc.now_playing_user = "Alice"
+        pc.now_playing_transpose = 3
+        pc.is_playing = True
+
+        result = k.restart()
+
+        assert result is True
+        assert k.queue_manager.queue[0]["file"] == path
+        assert k.queue_manager.queue[0]["semitones"] == 3
+        assert pc.skipped_reasons == ["restart"]
+
+    def test_restart_replays_in_place_when_autoplay_on(self, mock_karaoke_with_songs):
+        """Autoplay on: restart replays from the top without re-queuing."""
+        k = mock_karaoke_with_songs
+        k.preferences.set("autoplay", "True")
+        pc = k.playback_controller
+        pc.now_playing = "Artist - Song One"
+        pc.now_playing_filename = "/songs/Artist - Song One---abc123.mp4"
+        pc.now_playing_user = "Alice"
+        pc.is_playing = True
+
+        result = k.restart()
+
+        assert result is True
+        assert pc.is_paused is False
+        assert pc.skipped_reasons == []
+        assert k.queue_manager.queue == []
+
+
+class TestSkip:
+    """Tests for the skip method."""
+
+    def test_skip_delegates_to_player_when_playing(self, mock_karaoke):
+        """A playing song is skipped by the player, as before."""
+        pc = mock_karaoke.playback_controller
+        pc.is_playing = True
+
+        result = mock_karaoke.skip()
+
+        assert result is True
+        assert pc.skipped_reasons == ["skip"]
+
+    def test_skip_drops_the_cued_song_when_nothing_playing(self, mock_karaoke):
+        """Autoplay off: skipping the waiting song removes it from the queue head."""
+        k = mock_karaoke
+        k.queue_manager.enqueue("/songs/Waiting Song---abc123.mp4", "Alice")
+        k.queue_manager.enqueue("/songs/Next Song---def456.mp4", "Bob")
+        k.playback_controller.is_playing = False
+        notes: list[str] = []
+        k.events.on("notification", lambda message, category=None: notes.append(message))
+
+        result = k.skip()
+
+        assert result is True
+        assert [item["file"] for item in k.queue_manager.queue] == ["/songs/Next Song---def456.mp4"]
+        assert any("Waiting Song" in note for note in notes)
+
+    def test_skip_returns_false_when_nothing_playing_or_queued(self, mock_karaoke):
+        """Nothing to skip and nothing cued: a no-op that reports it did nothing."""
+        mock_karaoke.playback_controller.is_playing = False
+
+        assert mock_karaoke.skip() is False
+
 
 class TestStop:
     """Tests for the stop method."""
@@ -363,18 +451,6 @@ class TestKeepAwake:
         assert mock_karaoke.keep_awake is False
 
 
-class TestResetNowPlayingNotification:
-    """Tests for the reset_now_playing_notification method."""
-
-    def test_reset_notification(self, mock_karaoke):
-        """Test that notification is reset to None."""
-        mock_karaoke.now_playing_notification = "Some notification"
-
-        mock_karaoke.reset_now_playing_notification()
-
-        assert mock_karaoke.now_playing_notification is None
-
-
 class TestTransposeCurrent:
     """Tests for transpose_current, which restarts a song in a new key."""
 
@@ -395,6 +471,25 @@ class TestTransposeCurrent:
         assert k.queue_manager.queue[0]["file"] == path
         assert k.queue_manager.queue[0]["semitones"] == 2
         assert k.playback_controller.skipped_reasons == ["transpose"]
+
+    def test_transpose_saves_the_key_against_the_singer(self, mock_karaoke_with_songs):
+        """A key set after the song starts is remembered, like the pending slider's."""
+        k = mock_karaoke_with_songs
+        path = self._start_playing(k)
+
+        k.transpose_current(2)
+
+        k.singer_manager.save_key.assert_called_once_with("Alice", path, 2)
+
+    def test_transpose_does_not_save_when_the_requeue_is_refused(self, mock_karaoke_with_songs):
+        """A key the singer never got to sing in is not worth remembering."""
+        k = mock_karaoke_with_songs
+        path = self._start_playing(k)
+        k.queue_manager.enqueue(path, "Bob")
+
+        k.transpose_current(2)
+
+        k.singer_manager.save_key.assert_not_called()
 
     def test_transpose_keeps_playing_when_the_requeue_is_refused(self, mock_karaoke_with_songs):
         """A refused requeue must not skip: the singer would lose their turn.

@@ -65,6 +65,21 @@ class TestQueueManagerEnqueue:
         assert queue_manager.queue[0]["file"] == "/songs/test---abc.mp4"
         assert queue_manager.queue[0]["user"] == "User1"
 
+    def test_enqueue_emits_song_queued_with_the_path(self, queue_manager, events):
+        """A duration subscriber probes this path while the song waits."""
+        queued = []
+        events.on("song_queued", queued.append)
+        queue_manager.enqueue("/songs/test---abc.mp4", "User1")
+        assert queued == ["/songs/test---abc.mp4"]
+
+    def test_rejected_enqueue_emits_no_song_queued(self, queue_manager, events):
+        """A duplicate is not added, so nothing should probe it."""
+        queue_manager.enqueue("/songs/test---abc.mp4", "User1")
+        queued = []
+        events.on("song_queued", queued.append)
+        queue_manager.enqueue("/songs/test---abc.mp4", "User2")
+        assert queued == []
+
     def test_enqueue_prevents_duplicates(self, queue_manager):
         """Enqueuing the same song twice should fail."""
         queue_manager.enqueue("/songs/test---abc.mp4", "User1")
@@ -475,6 +490,27 @@ class TestQueueManagerPopNext:
         assert song["title"] == "test"
 
 
+class TestQueueManagerSetSongSemitones:
+    """Test pre-setting a queued song's key."""
+
+    def test_sets_semitones_on_queued_song(self, queue_manager):
+        """Setting the key updates the matching song and reports success."""
+        queue_manager.enqueue("/songs/song1---abc.mp4", "User1")
+        queue_manager.enqueue("/songs/song2---def.mp4", "User2")
+
+        result = queue_manager.set_song_semitones("/songs/song2---def.mp4", 3)
+
+        assert result is True
+        assert queue_manager.queue[1]["semitones"] == 3
+        assert queue_manager.queue[0]["semitones"] == 0
+
+    def test_missing_song_returns_false(self, queue_manager):
+        """Setting the key of a song not in the queue reports failure."""
+        queue_manager.enqueue("/songs/song1---abc.mp4", "User1")
+
+        assert queue_manager.set_song_semitones("/songs/absent---xyz.mp4", 2) is False
+
+
 class TestQueueManagerClear:
     """Test queue clearing."""
 
@@ -641,3 +677,31 @@ class TestQueueManagerHelpers:
 
         qm.enqueue("/songs/song1---abc.mp4", "LimitedUser")
         assert qm.is_user_limited("LimitedUser") is True
+
+
+class TestRenameSinger:
+    """Re-attributing queued items when a singer renames themselves."""
+
+    def test_moves_every_matching_item_and_counts_them(self, queue_manager):
+        queue_manager.enqueue("/songs/song1---abc.mp4", "Dvae")
+        queue_manager.enqueue("/songs/song2---def.mp4", "Other")
+        queue_manager.enqueue("/songs/song3---ghi.mp4", "dvae")
+        moved = queue_manager.rename_singer("Dvae", "Davey")
+        assert moved == 2
+        users = [item["user"] for item in queue_manager.queue]
+        assert users == ["Davey", "Other", "Davey"]
+
+    def test_matches_case_insensitively(self, queue_manager):
+        queue_manager.enqueue("/songs/song1---abc.mp4", "DVAE")
+        assert queue_manager.rename_singer("dvae", "Davey") == 1
+        assert queue_manager.queue[0]["user"] == "Davey"
+
+    def test_a_name_with_no_items_moves_nothing(self, queue_manager):
+        queue_manager.enqueue("/songs/song1---abc.mp4", "Other")
+        assert queue_manager.rename_singer("Dvae", "Davey") == 0
+        assert queue_manager.queue[0]["user"] == "Other"
+
+    def test_has_user_sees_a_queued_name_case_insensitively(self, queue_manager):
+        queue_manager.enqueue("/songs/song1---abc.mp4", "Dvae")
+        assert queue_manager.has_user("dvae") is True
+        assert queue_manager.has_user("Someone") is False

@@ -1,7 +1,7 @@
 """Unit tests for SongManager."""
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -260,6 +260,46 @@ class TestRename:
         assert (subfolder / "New---abc.cdg").exists()
 
 
+class TestLibraryConfinement:
+    """delete() and rename() refuse any path resolving outside download_path."""
+
+    def test_delete_refuses_a_path_outside_the_library(self, tmp_path, mock_db):
+        library = tmp_path / "library"
+        library.mkdir()
+        outside = tmp_path / "secret.txt"
+        outside.write_text("keep me")
+        sm = SongManager(str(library), db=mock_db, events=EventSystem())
+
+        with pytest.raises(PermissionError):
+            sm.delete(_native(outside))
+
+        assert outside.exists()
+
+    def test_delete_refuses_a_traversal_out_of_the_library(self, tmp_path, mock_db):
+        library = tmp_path / "library"
+        library.mkdir()
+        outside = tmp_path / "secret.txt"
+        outside.write_text("keep me")
+        sm = SongManager(str(library), db=mock_db, events=EventSystem())
+
+        with pytest.raises(PermissionError):
+            sm.delete(_native(library / ".." / "secret.txt"))
+
+        assert outside.exists()
+
+    def test_rename_refuses_a_path_outside_the_library(self, tmp_path, mock_db):
+        library = tmp_path / "library"
+        library.mkdir()
+        outside = tmp_path / "secret.txt"
+        outside.write_text("keep me")
+        sm = SongManager(str(library), db=mock_db, events=EventSystem())
+
+        with pytest.raises(PermissionError):
+            sm.rename(_native(outside), "pwned")
+
+        assert outside.read_text() == "keep me"
+
+
 class TestRenameCollides:
     """Only a different song's file is a clash, whatever the filesystem makes of case."""
 
@@ -339,9 +379,29 @@ class TestDBCoordination:
         song.write_text("fake")
         mock_db = MagicMock()
         sm = SongManager(str(tmp_path), db=mock_db, events=EventSystem())
-        sm.register_download(_native(song))
+        with patch("pikaraoke.lib.song_manager.get_media_duration", return_value=180.0):
+            sm.register_download(_native(song))
         assert _native(song) in sm.songs
         mock_db.insert_songs.assert_called_once()
+
+    def test_register_download_fills_the_duration(self, tmp_path):
+        """The row is born with its length, so a download never needs the sweep."""
+        song = tmp_path / "New---xyz12345678.mp4"
+        song.write_text("fake")
+        mock_db = MagicMock()
+        sm = SongManager(str(tmp_path), db=mock_db, events=EventSystem())
+        with patch("pikaraoke.lib.song_manager.get_media_duration", return_value=180.0):
+            sm.register_download(_native(song))
+        mock_db.set_duration.assert_called_once_with(_native(song), 180.0)
+
+    def test_register_download_skips_duration_when_probe_fails(self, tmp_path):
+        song = tmp_path / "New---xyz12345678.mp4"
+        song.write_text("fake")
+        mock_db = MagicMock()
+        sm = SongManager(str(tmp_path), db=mock_db, events=EventSystem())
+        with patch("pikaraoke.lib.song_manager.get_media_duration", return_value=None):
+            sm.register_download(_native(song))
+        mock_db.set_duration.assert_not_called()
 
 
 # enable_title_tidy defaults to False, so every test that cares about it sets it
@@ -397,6 +457,33 @@ class TestSearch:
         sm = _manager(tmp_path, mock_db, [song])
         assert sm.search("celine") == [song]
         assert sm.search("céline") == [song]
+
+    def test_slash_and_dash_both_find_the_song(self, tmp_path, mock_db):
+        song = "/songs/AC-DC - Highway to Hell---aaaaaaaaaaa.mp4"
+        sm = _manager(tmp_path, mock_db, [song])
+        assert sm.search("AC/DC") == [song]
+        assert sm.search("AC-DC") == [song]
+
+    def test_apostrophe_matches_both_directions(self, tmp_path, mock_db):
+        with_mark = "/songs/What's Up---aaaaaaaaaaa.mp4"
+        sm = _manager(tmp_path, mock_db, [with_mark])
+        assert sm.search("What's Up?") == [with_mark]
+        assert sm.search("whats up") == [with_mark]
+        assert sm.search("what's up") == [with_mark]
+        without_mark = "/songs/Whats Up---bbbbbbbbbbb.mp4"
+        sm = _manager(tmp_path, mock_db, [without_mark])
+        assert sm.search("What's Up?") == [without_mark]
+
+    def test_ampersand_matches_the_spelled_out_word(self, tmp_path, mock_db):
+        song = "/songs/Simon & Garfunkel - The Sound of Silence---aaaaaaaaaaa.mp4"
+        sm = _manager(tmp_path, mock_db, [song])
+        assert sm.search("simon and garfunkel") == [song]
+        assert sm.search("simon & garfunkel") == [song]
+
+    def test_run_together_query_still_misses(self, tmp_path, mock_db):
+        """The accepted limit: punctuation folds to a space, so `ACDC` stays one term."""
+        sm = _manager(tmp_path, mock_db, ["/songs/AC-DC - Highway to Hell---aaaaaaaaaaa.mp4"])
+        assert sm.search("ACDC") == []
 
     def test_no_match_returns_empty(self, tmp_path, mock_db):
         sm = _manager(tmp_path, mock_db, ["/songs/Abba - Waterloo---aaaaaaaaaaa.mp4"])
